@@ -266,16 +266,22 @@ class BuilderTest extends TestCase
         $this->assertArrayNotHasKey('PardGrazDokPrekeDetEil', $data['TrumpasPardGrazDok']);
     }
 
-    public function test_sales_return_full_uses_graz_dok_line_keys(): void
+    public function test_sales_return_full_uses_shared_pard_dok_line_keys(): void
     {
         $data = (new SalesReturnBuilder())
             ->client('CLI001')
             ->date('2024-01-20')
             ->addProduct('PRD001', quantity: 2, price: 19.99)
+            ->addService('SRV001', quantity: 1, price: 5.00)
             ->build();
 
         $this->assertArrayHasKey('PardGrazDok', $data);
-        $this->assertArrayHasKey('PardGrazDokPrekeDetEil', $data['PardGrazDok']);
+        // The FVS spec defines one shared set of detail elements for the whole
+        // sales family; PardGrazDok*DetEil does not exist and is silently ignored.
+        $this->assertArrayHasKey('PardDokPrekeDetEil', $data['PardGrazDok']);
+        $this->assertArrayHasKey('PardDokPaslaugaDetEil', $data['PardGrazDok']);
+        $this->assertArrayNotHasKey('PardGrazDokPrekeDetEil', $data['PardGrazDok']);
+        $this->assertArrayNotHasKey('PardGrazDokPaslaugaDetEil', $data['PardGrazDok']);
     }
 
     public function test_purchase_return_short_uses_pirk_dok_line_keys(): void
@@ -290,6 +296,24 @@ class BuilderTest extends TestCase
         $this->assertArrayHasKey('TrumpasPirkGrazDok', $data);
         $this->assertArrayHasKey('PirkDokPrekeDetEil', $data['TrumpasPirkGrazDok']);
         $this->assertArrayNotHasKey('PirkGrazDokPrekeDetEil', $data['TrumpasPirkGrazDok']);
+    }
+
+    public function test_purchase_return_full_uses_shared_pirk_dok_line_keys(): void
+    {
+        $data = (new PurchaseReturnBuilder())
+            ->client('SUP001')
+            ->date('2024-01-20')
+            ->addProduct('PRD001', quantity: 10, price: 9.99)
+            ->addService('SRV001', quantity: 1, price: 5.00)
+            ->build();
+
+        $this->assertArrayHasKey('PirkGrazDok', $data);
+        // Same shared-detail-element rule as the sales family: PirkGrazDok*DetEil
+        // does not exist in the FVS spec and is silently ignored by the server.
+        $this->assertArrayHasKey('PirkDokPrekeDetEil', $data['PirkGrazDok']);
+        $this->assertArrayHasKey('PirkDokPaslaugaDetEil', $data['PirkGrazDok']);
+        $this->assertArrayNotHasKey('PirkGrazDokPrekeDetEil', $data['PirkGrazDok']);
+        $this->assertArrayNotHasKey('PirkGrazDokPaslaugaDetEil', $data['PirkGrazDok']);
     }
 
     public function test_write_off_builder_builds_correct_structure(): void

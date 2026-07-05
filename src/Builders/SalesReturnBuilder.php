@@ -21,6 +21,11 @@ use Finvalda\Enums\OperationClass;
  *     ->addProduct('PRD001', quantity: 2, price: 19.99)
  *     ->save('RETURN');
  * ```
+ *
+ * Note: in live testing the full PardGrazDok variant was rejected with error
+ * 2012 ("Xml string is incomplete") even with a spec-correct payload, while
+ * the identical fields via ->short() (TrumpasPardGrazDok) succeeded. If the
+ * full variant fails with 2012, use ->short().
  */
 final class SalesReturnBuilder extends OperationBuilder
 {
@@ -38,12 +43,16 @@ final class SalesReturnBuilder extends OperationBuilder
 
     protected function getProductLinesKey(): string
     {
-        return $this->short ? 'PardDokPrekeDetEil' : 'PardGrazDokPrekeDetEil';
+        // The FVS spec defines one shared set of detail elements for the whole
+        // sales family (PardDok, PardRezDok, PardGrazDok, UVMPardRezDok).
+        // PardGrazDok*DetEil does not exist — the server silently ignores it
+        // and then rejects the operation with 1037 "no detail rows".
+        return 'PardDokPrekeDetEil';
     }
 
     protected function getServiceLinesKey(): string
     {
-        return $this->short ? 'PardDokPaslaugaDetEil' : 'PardGrazDokPaslaugaDetEil';
+        return 'PardDokPaslaugaDetEil';
     }
 
     /**
@@ -92,6 +101,10 @@ final class SalesReturnBuilder extends OperationBuilder
 
     /**
      * Set the original document reference.
+     *
+     * Warning: sGrazDokumentas/sGrazZurnalas/nGrazNumeris do not appear in the
+     * official FVS spec. Finvalda silently ignores unknown fields — verify
+     * against your server that the linkage actually lands before relying on it.
      */
     public function originalDocument(string $document, string $journal, int $number): self
     {
@@ -144,6 +157,9 @@ final class SalesReturnBuilder extends OperationBuilder
 
     /**
      * Set the return reason.
+     *
+     * Warning: sGrazPriezastis does not appear in the official FVS spec and may
+     * be silently ignored by the server.
      */
     public function reason(string $reason): self
     {

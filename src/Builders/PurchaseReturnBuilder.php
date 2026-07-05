@@ -38,12 +38,16 @@ final class PurchaseReturnBuilder extends OperationBuilder
 
     protected function getProductLinesKey(): string
     {
-        return $this->short ? 'PirkDokPrekeDetEil' : 'PirkGrazDokPrekeDetEil';
+        // The FVS spec defines one shared set of detail elements for the whole
+        // purchase family (PirkDok, PirkUzsDok, PirkGrazDok, UVMPirkUzsDok).
+        // PirkGrazDok*DetEil does not exist — the server silently ignores it
+        // and then rejects the operation with 1037 "no detail rows".
+        return 'PirkDokPrekeDetEil';
     }
 
     protected function getServiceLinesKey(): string
     {
-        return $this->short ? 'PirkDokPaslaugaDetEil' : 'PirkGrazDokPaslaugaDetEil';
+        return 'PirkDokPaslaugaDetEil';
     }
 
     /**
@@ -82,6 +86,10 @@ final class PurchaseReturnBuilder extends OperationBuilder
 
     /**
      * Set the original document reference.
+     *
+     * Warning: sGrazDokumentas/sGrazZurnalas/nGrazNumeris do not appear in the
+     * official FVS spec. Finvalda silently ignores unknown fields — verify
+     * against your server that the linkage actually lands before relying on it.
      */
     public function originalDocument(string $document, string $journal, int $number): self
     {
@@ -134,6 +142,9 @@ final class PurchaseReturnBuilder extends OperationBuilder
 
     /**
      * Set the return reason.
+     *
+     * Warning: sGrazPriezastis does not appear in the official FVS spec and may
+     * be silently ignored by the server.
      */
     public function reason(string $reason): self
     {

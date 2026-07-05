@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-07-05
+
+### Fixed — full-variant return builders emitted non-spec detail-row elements
+- **`salesReturn()` and `purchaseReturn()` full (non-`short()`) variants now emit
+  the spec's shared detail-element keys.** The FVS spec defines ONE set of detail
+  elements per operation family — `PardDokPrekeDetEil` / `PardDokPaslaugaDetEil`
+  for all sales classes (PardDok, PardRezDok, PardGrazDok, UVMPardRezDok) and
+  `PirkDokPrekeDetEil` / `PirkDokPaslaugaDetEil` for all purchase classes
+  (PirkDok, PirkUzsDok, PirkGrazDok, UVMPirkUzsDok). The builders previously
+  emitted `PardGrazDok*DetEil` / `PirkGrazDok*DetEil` for the full variants —
+  elements that do not exist in the spec. The server silently ignores unknown
+  elements and then rejects the operation with **1037 "Operation do not has
+  detail rows!"** (verified against a live server). The `short()` variants
+  already used the correct keys and are unchanged.
+
+### Known issues (documented in README + docblocks)
+- In live testing the full `PardGrazDok` variant still failed with **2012 "Xml
+  string is incomplete"** even with the corrected detail keys and all
+  spec-mandatory header fields (`sKlientas`, `sDokumentas`, `sValiuta`, `tData`),
+  while the identical payload via `->short()` succeeded. Until the missing
+  ingredient is identified, `->short()` is the proven shape for returns.
+- `originalDocument()` (`sGrazDokumentas`/`sGrazZurnalas`/`nGrazNumeris`) and
+  `reason()` (`sGrazPriezastis`) fields appear in neither the official spec nor
+  the Postman collection; Finvalda silently ignores unknown fields, so verify
+  the linkage lands on your server before relying on it.
+
+### Added
+- `BuilderRequestBodyTest` — regression tests pinning the outgoing
+  `InsertNewOperation` request body (exact `ItemClassName` and detail-element
+  keys inside the serialized `xmlstring`) for the short and full variants of all
+  six sales/purchase family builders.
+
 ## [3.1.1] - 2026-06-25
 
 ### Fixed — clear error when DeleteItem is unsupported by the server build

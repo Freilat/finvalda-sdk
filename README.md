@@ -665,6 +665,16 @@ $result = $finvalda->purchaseReturn()
     ->save('RETURN');
 ```
 
+> **Note:** In live testing the full `PardGrazDok` variant was rejected with error
+> 2012 ("Xml string is incomplete") even with a spec-correct payload, while the
+> same fields via `->short()` (`TrumpasPardGrazDok`) succeeded. If a full-variant
+> return fails with 2012, use `->short()` — it is the shape proven to work.
+>
+> The `originalDocument()` / `reason()` fields (`sGrazDokumentas`, `sGrazZurnalas`,
+> `nGrazNumeris`, `sGrazPriezastis`) do not appear in the official FVS spec.
+> Finvalda silently ignores unknown fields, so verify against your server that the
+> linkage actually lands before relying on it.
+
 ### Creating Payments
 
 ```php
