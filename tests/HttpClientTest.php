@@ -466,4 +466,64 @@ class HttpClientTest extends TestCase
 
         $this->assertSame($raw, $body['input']['dKaina']);
     }
+
+    public function test_encode_json_uses_shortest_float_representation_regardless_of_host_serialize_precision(): void
+    {
+        $previous = ini_get('serialize_precision');
+        ini_set('serialize_precision', '50');
+
+        try {
+            $httpClient = new HttpClient(new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'user',
+                password: 'pass',
+            ));
+
+            $json = $httpClient->encodeJson([
+                'dSumaV' => 21.49,
+                'dArtifact' => 0.1 + 0.2,
+            ]);
+
+            $this->assertSame('{"dSumaV":21.49,"dArtifact":0.3}', $json);
+        } finally {
+            ini_set('serialize_precision', $previous);
+        }
+    }
+
+    public function test_post_json_body_uses_shortest_float_representation_regardless_of_host_serialize_precision(): void
+    {
+        $previous = ini_get('serialize_precision');
+        ini_set('serialize_precision', '50');
+
+        try {
+            $history = [];
+            $mock = new MockHandler([
+                new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+            ]);
+            $handlerStack = HandlerStack::create($mock);
+            $handlerStack->push(Middleware::history($history));
+            $guzzle = new Client(['handler' => $handlerStack]);
+
+            $httpClient = new HttpClient(new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'user',
+                password: 'pass',
+            ), $guzzle);
+
+            $httpClient->postJson('GetRecommendedPrice', [
+                'input' => [
+                    'dSumaV' => 21.49,
+                    'dArtifact' => 0.1 + 0.2,
+                ],
+            ]);
+
+            $rawBody = (string) $history[0]['request']->getBody();
+
+            $this->assertStringContainsString('"dSumaV":21.49', $rawBody);
+            $this->assertStringContainsString('"dArtifact":0.3', $rawBody);
+            $this->assertStringNotContainsString('21.4899999', $rawBody);
+        } finally {
+            ini_set('serialize_precision', $previous);
+        }
+    }
 }

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] - 2026-07-09
+
+### Fixed — float normalization defeated by a high host `serialize_precision`
+- **Outbound floats now serialize as their shortest round-trippable form
+  regardless of the host's `serialize_precision` php.ini.** v3.3.0 rounded
+  outbound floats but never controlled how they were encoded. On a server with
+  `serialize_precision` set to a positive value, `json_encode` expands every
+  non-terminating binary fraction into its full decimal — e.g. a clean `21.49`
+  became `21.489999999999998436805981327779591083526611328125` in the request
+  body (and rounding was a no-op, since `round(21.49, 10) === 21.49`).
+  `HttpClient` now forces `serialize_precision = -1` around both SDK-owned
+  encode boundaries — `encodeJson()` (the operation `xmlstring`) and the request
+  send (JSON body plus the debug/PSR-3 log encode) — so `21.49` stays `21.49`
+  and `0.1 + 0.2` stays `0.3`. Rounding is retained: it collapses arithmetic
+  noise into the intended double, which `serialize_precision = -1` then renders
+  cleanly.
+
 ## [3.3.0] - 2026-07-09
 
 ### Added — outbound float artifact normalization

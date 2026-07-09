@@ -169,7 +169,33 @@ final class HttpClient
      */
     public function encodeJson(mixed $data): string
     {
-        return json_encode($this->normalizer->normalize($data), JSON_THROW_ON_ERROR);
+        return $this->withShortestFloatEncoding(
+            fn (): string => json_encode($this->normalizer->normalize($data), JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /**
+     * Run an encoding step with serialize_precision forced to -1 so floats
+     * serialize as their shortest round-trippable form (e.g. 21.49, not
+     * 21.489999999999998...) regardless of the host's php.ini. Rounding alone
+     * does not suffice: a host that sets serialize_precision high expands every
+     * non-terminating binary fraction back into its full decimal.
+     *
+     * @template TReturn
+     *
+     * @param  callable(): TReturn  $encode
+     * @return TReturn
+     */
+    private function withShortestFloatEncoding(callable $encode): mixed
+    {
+        $previous = ini_get('serialize_precision');
+        ini_set('serialize_precision', '-1');
+
+        try {
+            return $encode();
+        } finally {
+            ini_set('serialize_precision', $previous);
+        }
     }
 
     public function getRaw(string $endpoint, array $params = []): string
@@ -232,10 +258,10 @@ final class HttpClient
         };
 
         if ($this->retryHandler !== null) {
-            return $this->retryHandler->execute($doRequest);
+            return $this->withShortestFloatEncoding(fn (): string => $this->retryHandler->execute($doRequest));
         }
 
-        return $doRequest();
+        return $this->withShortestFloatEncoding($doRequest);
     }
 
     private function logRequest(string $method, string $endpoint, array $options): void

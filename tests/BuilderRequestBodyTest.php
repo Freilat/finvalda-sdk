@@ -138,4 +138,42 @@ class BuilderRequestBodyTest extends TestCase
         $this->assertSame(21.123456, $line['dPVM_Procentas']);
         $this->assertSame(2.123456, $line['dNeto']);
     }
+
+    public function test_builder_xmlstring_uses_shortest_float_representation_regardless_of_host_serialize_precision(): void
+    {
+        $previous = ini_get('serialize_precision');
+        ini_set('serialize_precision', '50');
+
+        try {
+            $history = [];
+            $http = $this->createHttpClient([
+                $this->jsonResponse(['AccessResult' => 'Success', 'nResult' => 0]),
+            ], $history);
+
+            $finvalda = new Finvalda(new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'user',
+                password: 'pass',
+            ), $http);
+
+            $finvalda->sale()
+                ->client('CLI001')
+                ->date('2024-01-20')
+                ->product(
+                    ProductLine::make('PRD001', 1)
+                        ->amount(21.49)
+                        ->price(0.1 + 0.2)
+                )
+                ->save('PARAM');
+
+            $body = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            $xmlstring = $body['xmlstring'];
+
+            $this->assertStringContainsString('"dSumaV":21.49', $xmlstring);
+            $this->assertStringContainsString('"dKaina":0.3', $xmlstring);
+            $this->assertStringNotContainsString('21.4899999', $xmlstring);
+        } finally {
+            ini_set('serialize_precision', $previous);
+        }
+    }
 }
