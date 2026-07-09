@@ -98,4 +98,56 @@ class FinvaldaConfigTest extends TestCase
 
         $this->assertSame($logger, $config->logger);
     }
+
+    public function test_float_normalization_defaults_are_enabled_with_ten_decimal_places(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+        );
+
+        $this->assertTrue($config->normalizeFloats);
+        $this->assertSame(10, $config->floatPrecision);
+    }
+
+    public function test_from_array_maps_float_normalization_config(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'normalize_floats' => false,
+            'float_precision' => 2,
+        ]);
+
+        $this->assertFalse($config->normalizeFloats);
+        $this->assertSame(2, $config->floatPrecision);
+    }
+
+    public function test_it_rejects_negative_float_precision(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Finvalda float precision must be between 0 and 14 decimal places');
+
+        new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            floatPrecision: -1,
+        );
+    }
+
+    public function test_it_rejects_excessive_float_precision(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Finvalda float precision must be between 0 and 14 decimal places');
+
+        new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            floatPrecision: 15,
+        );
+    }
 }

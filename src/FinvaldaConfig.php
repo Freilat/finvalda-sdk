@@ -24,6 +24,8 @@ final class FinvaldaConfig
         public readonly int $timeout = 30,
         public readonly ?LoggerInterface $logger = null,
         public readonly ?RetryPolicy $retry = null,
+        public readonly bool $normalizeFloats = true,
+        public readonly int $floatPrecision = 10,
     ) {
         if ($this->baseUrl === '') {
             throw new InvalidArgumentException('Finvalda base URL is required');
@@ -35,6 +37,10 @@ final class FinvaldaConfig
 
         if ($this->password === '') {
             throw new InvalidArgumentException('Finvalda password is required');
+        }
+
+        if ($this->floatPrecision < 0 || $this->floatPrecision > 14) {
+            throw new InvalidArgumentException('Finvalda float precision must be between 0 and 14 decimal places');
         }
     }
 
@@ -74,6 +80,8 @@ final class FinvaldaConfig
             timeout: (int) ($config['timeout'] ?? 30),
             logger: $logger,
             retry: $retry,
+            normalizeFloats: (bool) ($config['normalize_floats'] ?? true),
+            floatPrecision: (int) ($config['float_precision'] ?? 10),
         );
     }
 }

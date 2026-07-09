@@ -48,12 +48,12 @@ abstract class Resource
     }
 
     /**
-     * Safely encode data to JSON, throwing on failure.
+     * Safely encode SDK-owned outbound data to JSON, throwing on failure.
      *
      * @throws \JsonException
      */
     protected function jsonEncode(mixed $data): string
     {
-        return json_encode($data, JSON_THROW_ON_ERROR);
+        return $this->http->encodeJson($data);
     }
 }

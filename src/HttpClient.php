@@ -12,6 +12,7 @@ use Finvalda\Exceptions\ServerException;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
+use Finvalda\Support\OutboundNumericNormalizer;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
@@ -39,6 +40,8 @@ final class HttpClient
 
     private ?RetryHandler $retryHandler;
 
+    private OutboundNumericNormalizer $normalizer;
+
     private bool $debug = false;
 
     private array $lastRequest = [];
@@ -62,6 +65,10 @@ final class HttpClient
         $this->retryHandler = $this->config->retry !== null
             ? new RetryHandler($this->config->retry, $this->logger)
             : null;
+        $this->normalizer = new OutboundNumericNormalizer(
+            enabled: $this->config->normalizeFloats,
+            precision: $this->config->floatPrecision,
+        );
     }
 
     /**
@@ -155,6 +162,16 @@ final class HttpClient
         }
     }
 
+    /**
+     * Encode SDK-owned outbound data using the configured numeric normalization.
+     *
+     * @throws \JsonException
+     */
+    public function encodeJson(mixed $data): string
+    {
+        return json_encode($this->normalizer->normalize($data), JSON_THROW_ON_ERROR);
+    }
+
     public function getRaw(string $endpoint, array $params = []): string
     {
         try {
@@ -179,6 +196,10 @@ final class HttpClient
 
     private function sendRequest(string $method, string $endpoint, array $options): string
     {
+        if (isset($options['json'])) {
+            $options['json'] = $this->normalizer->normalize($options['json']);
+        }
+
         $doRequest = function () use ($method, $endpoint, $options): string {
             $startTime = microtime(true);
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-07-09
+
+### Added — outbound float artifact normalization
+- **Outbound request payloads now have PHP binary-float artifacts stripped
+  before JSON encoding.** Float arithmetic such as `0.1 + 0.2` serializes as
+  `0.30000000000000004` and reached the Finvalda API verbatim. The SDK now
+  rounds every outbound float to a configurable precision (default 10) — high
+  enough to preserve any genuine accounting value while discarding ~1e-16
+  representation noise. Normalization is applied at the two SDK-owned encode
+  boundaries: the JSON request body in `HttpClient::sendRequest()` and the
+  serialized `xmlstring` produced by `Resource::jsonEncode()`. Query parameters
+  are unaffected — PHP's precision-based string cast already renders
+  `0.1 + 0.2` as `0.3`; only `json_encode` exposes the artifact.
+- Configurable via `FinvaldaConfig` (`normalizeFloats`, `floatPrecision`) and
+  the Laravel config keys `normalize_floats` / `float_precision`
+  (env `FINVALDA_NORMALIZE_FLOATS` / `FINVALDA_FLOAT_PRECISION`). Enabled by
+  default; pass `normalizeFloats: false` to send raw float values.
+
 ## [3.2.0] - 2026-07-05
 
 ### Fixed — full-variant return builders emitted non-spec detail-row elements

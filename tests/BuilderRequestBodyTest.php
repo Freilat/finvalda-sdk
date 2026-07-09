@@ -6,6 +6,7 @@ namespace Finvalda\Tests;
 
 use Finvalda\Finvalda;
 use Finvalda\FinvaldaConfig;
+use Finvalda\Builders\ProductLine;
 use Finvalda\Tests\Concerns\CreatesMockHttpClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -97,5 +98,44 @@ class BuilderRequestBodyTest extends TestCase
             $this->assertStringNotContainsString('GrazDokPrekeDetEil', $key);
             $this->assertStringNotContainsString('GrazDokPaslaugaDetEil', $key);
         }
+    }
+
+    public function test_builder_save_strips_float_artifacts_inside_xmlstring(): void
+    {
+        $history = [];
+        $http = $this->createHttpClient([
+            $this->jsonResponse(['AccessResult' => 'Success', 'nResult' => 0]),
+        ], $history);
+
+        $finvalda = new Finvalda(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+        ), $http);
+
+        $finvalda->sale()
+            ->client('CLI001')
+            ->date('2024-01-20')
+            ->product(
+                ProductLine::make('PRD001', 1.1 + 2.2)
+                    ->price(0.1 + 0.2)
+                    ->amount(12.345678)
+                    ->vat(percent: 21.123456, amount: 10.123456)
+                    ->weight(neto: 2.123456)
+            )
+            ->save('PARAM');
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $operation = json_decode($body['xmlstring'], true, flags: JSON_THROW_ON_ERROR);
+        $line = $operation['PardDok']['PardDokPrekeDetEil'][0];
+
+        $this->assertSame(0.3, $line['dKaina']);
+        $this->assertSame(3.3, $line['nKiekis']);
+        $this->assertSame(12.345678, $line['dSumaV']);
+        $this->assertSame(12.345678, $line['dSumaL']);
+        $this->assertSame(10.123456, $line['dSumaPVMV']);
+        $this->assertSame(10.123456, $line['dSumaPVML']);
+        $this->assertSame(21.123456, $line['dPVM_Procentas']);
+        $this->assertSame(2.123456, $line['dNeto']);
     }
 }

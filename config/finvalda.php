@@ -81,6 +81,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Outbound Float Normalization
+    |--------------------------------------------------------------------------
+    |
+    | Round every outbound float before JSON encoding to strip PHP binary-float
+    | artifacts (e.g. 0.30000000000000004) from Finvalda request payloads. The
+    | default precision is high enough to preserve any genuine accounting value
+    | while discarding representation noise.
+    |
+    */
+    'normalize_floats' => (bool) env('FINVALDA_NORMALIZE_FLOATS', true),
+    'float_precision' => (int) env('FINVALDA_FLOAT_PRECISION', 10),
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |

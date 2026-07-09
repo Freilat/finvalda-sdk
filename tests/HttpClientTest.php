@@ -404,4 +404,66 @@ class HttpClientTest extends TestCase
         $this->assertLessThanOrEqual(100_000 + 64, strlen($context['body']));
         $this->assertStringContainsString('[truncated', $context['body']);
     }
+
+    public function test_post_json_strips_float_artifacts_from_every_field(): void
+    {
+        $history = [];
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ]);
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push(Middleware::history($history));
+        $guzzle = new Client(['handler' => $handlerStack]);
+
+        $httpClient = new HttpClient(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+        ), $guzzle);
+
+        $httpClient->postJson('GetRecommendedPrice', [
+            'input' => [
+                'dKaina' => 0.1 + 0.2,
+                'nKiekis' => 1.1 + 2.2,
+                'dPVM_Procentas' => 21.123456,
+            ],
+        ]);
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $input = $body['input'];
+
+        $this->assertSame(0.3, $input['dKaina']);
+        $this->assertSame(3.3, $input['nKiekis']);
+        $this->assertSame(21.123456, $input['dPVM_Procentas']);
+    }
+
+    public function test_post_json_can_disable_float_normalization(): void
+    {
+        $history = [];
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ]);
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push(Middleware::history($history));
+        $guzzle = new Client(['handler' => $handlerStack]);
+
+        $httpClient = new HttpClient(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            normalizeFloats: false,
+        ), $guzzle);
+
+        $raw = 0.1 + 0.2;
+
+        $httpClient->postJson('GetRecommendedPrice', [
+            'input' => [
+                'dKaina' => $raw,
+            ],
+        ]);
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        $this->assertSame($raw, $body['input']['dKaina']);
+    }
 }
