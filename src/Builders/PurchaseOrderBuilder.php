@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Finvalda\Builders;
 
 use DateTimeInterface;
+use Finvalda\Builders\Concerns\HasAdditionalCostCodes;
 use Finvalda\Enums\DocumentType;
 use Finvalda\Enums\OperationClass;
 
@@ -23,11 +24,28 @@ use Finvalda\Enums\OperationClass;
  */
 final class PurchaseOrderBuilder extends OperationBuilder
 {
+    use HasAdditionalCostCodes;
+
     protected bool $short = false;
 
     public function getOperationClass(): OperationClass
     {
         return $this->short ? OperationClass::PurchaseOrderShort : OperationClass::PurchaseOrder;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function build(): array
+    {
+        $this->assertAdditionalCostCodesAllowed($this->getHeaderKey());
+
+        return parent::build();
+    }
+
+    protected function allowsAdditionalCostCodes(): bool
+    {
+        return ! $this->short;
     }
 
     protected function getHeaderKey(): string

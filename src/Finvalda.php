@@ -15,6 +15,7 @@ use Finvalda\Builders\ProductionBuilder;
 use Finvalda\Builders\PurchaseBuilder;
 use Finvalda\Builders\PurchaseOrderBuilder;
 use Finvalda\Builders\PurchaseReturnBuilder;
+use Finvalda\Builders\PurchaseUpdateBuilder;
 use Finvalda\Builders\SaleBuilder;
 use Finvalda\Builders\SalesReservationBuilder;
 use Finvalda\Builders\SalesReturnBuilder;
@@ -316,6 +317,18 @@ final class Finvalda
     public function purchaseReturn(): PurchaseReturnBuilder
     {
         return (new PurchaseReturnBuilder())->using($this);
+    }
+
+    /**
+     * Create a new purchase correction builder (KoregPirkDok via UpdateOperation).
+     *
+     * DESTRUCTIVE: a correction deletes and re-adds detail lines, rebuilding the
+     * product's stock layer. See PurchaseUpdateBuilder for the 4027 footgun and
+     * PurchaseUpdateBuilder::assertNotSold() for the pre-flight guard.
+     */
+    public function purchaseUpdate(): PurchaseUpdateBuilder
+    {
+        return (new PurchaseUpdateBuilder())->using($this);
     }
 
     // --- Fluent Operation Builders: Transfers & Adjustments ---

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Finvalda\Builders;
 
+use Finvalda\Exceptions\ValidationException;
+
 /**
  * Fluent value object for building product detail lines.
  *
@@ -147,6 +149,52 @@ final class ProductLine
     {
         foreach ($map as $level => $code) {
             $this->data["sObjektas{$level}"] = $code;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Allocate an additional-cost (papildomos išlaidos) amount to this line.
+     *
+     * Sets dPapIsldSumaV{slot} and dPapIsldSumaL{slot}. The slot number refers to
+     * the bucket declared in the operation header's sPapIslaiduKodas{slot} — see
+     * PurchaseBuilder::additionalCostCodes(). A line amount with no matching header
+     * bucket has nowhere to land; the line object cannot see the header, so that
+     * pairing is the caller's responsibility.
+     *
+     * Product lines only: the spec marks these fields "Tik PirkDokPrekeDetEil" and
+     * service detail lines do not define them.
+     *
+     * @param  int  $slot  Additional-cost slot, 1-4.
+     * @param  float  $currency  Amount in operation currency (dPapIsldSumaV{slot}).
+     * @param  float|null  $local  Amount in EUR (dPapIsldSumaL{slot}). Defaults to $currency.
+     *
+     * @throws ValidationException  When $slot is outside 1-4.
+     */
+    public function additionalCost(int $slot, float $currency, ?float $local = null): self
+    {
+        if ($slot < 1 || $slot > 4) {
+            throw new ValidationException("additionalCost() slot must be 1-4, {$slot} given");
+        }
+
+        $this->data["dPapIsldSumaV{$slot}"] = $currency;
+        $this->data["dPapIsldSumaL{$slot}"] = $local ?? $currency;
+
+        return $this;
+    }
+
+    /**
+     * Allocate several additional-cost amounts at once, keyed by slot.
+     *
+     * @param  array<int, float>  $map  e.g. [2 => 950.00, 4 => 310.00]
+     *
+     * @throws ValidationException  When any slot is outside 1-4.
+     */
+    public function additionalCosts(array $map): self
+    {
+        foreach ($map as $slot => $amount) {
+            $this->additionalCost($slot, $amount);
         }
 
         return $this;

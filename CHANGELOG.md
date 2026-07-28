@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-07-28
+
+### Added — additional purchase costs, purchase corrections, stock-op lookup
+
+Four gaps that forced callers to hand-roll plain Finvalda features. The server
+shipped the first three together (changelog #58, 2019-04-30) and they form one
+workflow: allocate costs on insert, or re-allocate by correcting — with a lookup
+that tells you whether correcting is safe.
+
+- **`PurchaseBuilder::additionalCostCodes()` / `PurchaseOrderBuilder::additionalCostCodes()`**
+  set the four additional-cost bucket codes (`sPapIslaiduKodas1..4`), previously
+  reachable only via `setHeader()` with raw Lithuanian field names. Accepts an
+  ordered list (`['KITOS', 'TRANSP']`) or a slot-keyed map (`[2 => 'TRANSP']`).
+  Validates arity (max 4), slot range (1-4) and code length (10). Rejected on
+  `->short()` at `build()` time — `TrumpasPirkDok`/`TrumpasPirkUzsDok` have no such
+  fields. Not added to `purchaseReturn()`: the spec marks the fields *Tik PirkDok ir
+  PirkUzsDok*. Shared via the new `Builders\Concerns\HasAdditionalCostCodes` trait.
+- **`ProductLine::additionalCost($slot, $currency, $local)`** and
+  **`additionalCosts([$slot => $amount])`** allocate a bucket amount to a line,
+  writing `dPapIsldSumaV{slot}` and `dPapIsldSumaL{slot}` as a pair — `set()` made it
+  easy to populate half a pair and book the line wrong. Not added to `ServiceLine`:
+  the spec marks all eight fields *Tik PirkDokPrekeDetEil*.
+- **`PurchaseUpdateBuilder`** (`$finvalda->purchaseUpdate()`) builds the
+  `KoregPirkDok` envelope for `UpdateOperation`. The correction envelope is not the
+  insert envelope — `sZurnalas`/`nNumeris` wrapper, a `PirkDokHeadEil` sub-node, and
+  `DelPrekeDetEil`/`DelPaslaugaDetEil` delete nodes with no insert-path equivalent —
+  so hand-assembled payloads drifted from the spec silently. `header()` rejects what
+  the node does not accept for a purchase: `sKlientas` (a purchase cannot change
+  supplier), any operation-date field (the node defines none), `sObjektas5`/`6`, and
+  the waybill fields. Reuses `ProductLine`/`ServiceLine` verbatim, enforcing the
+  fields the spec marks mandatory on a corrected line.
+
+  **⚠️ A correction is destructive, not an edit.** It deletes the named detail lines
+  and re-adds the ones you supply, which rebuilds the product's FIFO stock layer. The
+  internal delete fails with error **`4027`** (*Operacijos detalios eilutės yra
+  panaudotos kitose operacijose!*) once the goods have been consumed by another
+  operation. `4027` is documented under operation *deletion* errors, not the
+  `5000`–`5005` correction family, so an update call can return a deletion-class
+  code. It is not idempotent, and it fails late — unsold stock corrects fine, and the
+  same code path starts failing the day someone sells the goods. `UpdPrekeDetEil` is
+  not an escape hatch: it carries only `nPozymis` and `sPapInfo`, so it cannot
+  restate amounts. Guard with `assertNotSold()`, which checks every touched product
+  code and **fails closed** on an unresolvable history; it is deliberately not run by
+  `save()`.
+- **`Stock::purchaseOpFor($productCode)`** answers "which purchase operation
+  currently holds this product as stock, and has it been sold since" from
+  `GetPrekesIstorija`, instead of leaving every caller to re-derive it from
+  `Products::history()` rows. The latest purchase wins (a re-acquired item has several
+  purchase rows); a sale counts as sold only when dated at or after that purchase.
+  Returns a plain array rather than a `Response` and never throws — it is a pre-flight
+  check, and `null` means no purchase history or a failed call. Operation kinds are
+  matched on the literal `op_rusis_pav` values `Pirkimai`/`Pardavimai`, which are
+  observed against a live Finvalda and **not specified** anywhere in the API document;
+  an unrecognised kind is ignored rather than guessed at.
+
+Only purchases are covered on the correction side. The other six
+`UpdateOperationClass` cases share the envelope shape but each carries its own
+`Tik ...` annotations; use `operations()->update()` with a hand-built payload.
+
 ## [3.3.1] - 2026-07-09
 
 ### Fixed — float normalization defeated by a high host `serialize_precision`

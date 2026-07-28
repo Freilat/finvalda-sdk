@@ -21,6 +21,8 @@ Built from the official [Finvalda API documentation](https://documenter.getpostm
 - [Fluent Operation Builders](#fluent-operation-builders)
   - [Sales](#creating-a-sale)
   - [Purchases](#creating-a-purchase)
+  - [Additional Purchase Costs](#additional-purchase-costs)
+  - [Correcting a Purchase](#correcting-a-purchase)
   - [Internal Transfers](#creating-an-internal-transfer)
   - [Returns](#creating-returns)
   - [Payments](#creating-payments)
@@ -624,6 +626,156 @@ These methods are available on `sale()`, `salesReservation()`, `salesReturn()`,
 > pass to `save()`. There is no header field to specify the journal directly on
 > create; the resulting journal/number come back on the `OperationResult`.
 
+### Additional Purchase Costs
+
+A purchase header can declare up to four **additional-cost buckets** (*papildomos
+išlaidos*) — named categories such as freight, registration or insurance — whose
+amounts are then allocated per product line. The two halves are one feature: bucket
+codes without per-line amounts book nothing, and per-line amounts without bucket
+codes have nowhere to land.
+
+```php
+$finvalda->purchase()
+    ->client('SUP001')
+    ->date('2026-07-28')
+    ->warehouse('WH01')
+    ->supplierInvoice('INV-2026-0042')
+    ->additionalCostCodes(['KITOS', 'TRANSP', 'ILGALSAV', 'DRAUDIM'])  // slots 1-4
+    ->product(
+        ProductLine::make('WSM000001TB061527', 1)
+            ->warehouse('WH01')
+            ->amount(38_500.00)
+            ->additionalCost(2, 950.00)              // TRANSP  → dPapIsldSumaV2/L2
+            ->additionalCosts([4 => 310.00])         // DRAUDIM → dPapIsldSumaV4/L4
+    )
+    ->save('PIRKNAU');
+```
+
+| Method | API fields | Notes |
+|---|---|---|
+| `additionalCostCodes([...])` | `sPapIslaiduKodas1..4` | Ordered list fills slots 1-4 in order; a slot-keyed map (`[2 => 'TRANSP']`) sets individual slots. Max 4 codes, 10 chars each. |
+| `ProductLine::additionalCost($slot, $currency, $local)` | `dPapIsldSumaV{slot}`, `dPapIsldSumaL{slot}` | Always writes both the currency and EUR halves; `$local` defaults to `$currency`. |
+| `ProductLine::additionalCosts([$slot => $amount])` | same | Plural convenience, keyed by slot. |
+
+> **The slot *number* is the binding.** Slot 2 in the header is what slot 2 on the
+> line allocates to. Slots are positional and server-configured — do not reorder
+> them between bookings of the same journal, or previously booked allocations stop
+> lining up with their buckets.
+
+Availability follows the spec exactly:
+
+- Cost codes exist on **`purchase()` and `purchaseOrder()` only** (*Tik PirkDok ir
+  PirkUzsDok*). `purchaseReturn()` has no such method.
+- They are **not** available on `->short()` — `TrumpasPirkDok` has no
+  additional-cost fields. Since `short()` may be called after
+  `additionalCostCodes()`, that conflict is reported by `build()`/`save()`.
+- Per-line amounts are **product lines only** (*Tik PirkDokPrekeDetEil*).
+  `ServiceLine` has no `additionalCost()`, because service detail rows do not
+  define the fields.
+
+The SDK does not round the amounts (the fields are `Numeric(14,2)`) and cannot
+check that the header actually declares a code in the slot you allocate to — the
+line object cannot see the header.
+
+### Correcting a Purchase
+
+`purchaseUpdate()` builds the `KoregPirkDok` envelope for `UpdateOperation`.
+
+> ### ⚠️ A correction is destructive, not an edit
+>
+> `KoregPirkDok` corrects an operation by **deleting** the named detail lines and
+> **re-adding** the ones you supply. Re-adding a product line **rebuilds that
+> product's FIFO stock layer**, and the internal delete fails outright once the
+> goods have been consumed by another operation — a sale, write-off, transfer or
+> production run. The error is **`4027` — *Operacijos detalios eilutės yra
+> panaudotos kitose operacijose!*** Note it is documented under operation
+> *deletion* errors, not the `5000`–`5005` correction family, so an **update** call
+> can return a **deletion**-class code.
+>
+> Three things worth knowing before you ship a caller:
+>
+> 1. **It is not idempotent.** A re-added line is a new acquisition with a new cost
+>    layer. Re-sending the same correction is not a no-op.
+> 2. **It fails late.** Unsold stock corrects fine; the same code path starts
+>    failing the day someone sells the goods.
+> 3. **Do not rely on partial success.** If a multi-line correction rejects on one
+>    consumed line, re-read the operation before retrying.
+>
+> Check `Stock::purchaseOpFor($code)['sold']` first, or call `assertNotSold()`.
+> `UpdPrekeDetEil` is **not** an escape hatch: the spec gives it only `sKodas`,
+> `nKodasN`, `nPozymis` and `sPapInfo`, so it can flip a line's marked flag and free
+> text but cannot restate amounts. There is no way to re-allocate costs without the
+> delete/re-add cycle.
+
+```php
+$stock = $finvalda->stock()->purchaseOpFor('WSM000001TB061527');
+
+if ($stock === null || $stock['sold']) {
+    // Sold, or never purchased. A correction here would hit 4027, or rebuild a
+    // stock layer underneath a sale. Report it; let an accountant handle it.
+    return;
+}
+
+$finvalda->purchaseUpdate()
+    ->journal($stock['journal'])
+    ->number($stock['op_number'])
+    ->additionalCostCodes([2 => 'TRANSP'])
+    ->removeProduct('WSM000001TB061527', $stock['warehouse'])
+    ->product(
+        ProductLine::make('WSM000001TB061527', 1)
+            ->warehouse($stock['warehouse'])
+            ->amount(38_500.00)
+            ->vat(percent: 21, amount: 8_085.00)
+            ->additionalCost(2, 1_270.00)   // was 950.00
+    )
+    ->save('PIRKNAU');
+```
+
+This emits the documented envelope — note that it is **not** the insert envelope:
+
+```json
+{
+  "KoregPirkDok": {
+    "sZurnalas": "PIRKNAU",
+    "nNumeris": 1421,
+    "PirkDokHeadEil": { "sPapIslaiduKodas2": "TRANSP" },
+    "DelPrekeDetEil": [ { "sKodas": "WSM000001TB061527", "sSandelis": "WH01" } ],
+    "PirkDokPrekeDetEil": [ { "sKodas": "WSM000001TB061527", "...": "..." } ]
+  }
+}
+```
+
+| Method | Node | Notes |
+|---|---|---|
+| `journal()` / `number()` | `sZurnalas`, `nNumeris` | Both required — they identify the operation to correct. |
+| `header([...])` | `PirkDokHeadEil` | Raw field names, merged across calls, validated against the documented column set. Omit to leave the header alone. |
+| `additionalCostCodes([...])` | `PirkDokHeadEil` | Same method as on insert (*Tik KoregPirkDok ir KoregPirkUzsDok*). |
+| `removeProduct($code, $warehouse)` | `DelPrekeDetEil` | Warehouse optional. |
+| `removeService($code)` | `DelPaslaugaDetEil` | |
+| `product(ProductLine)` | `PirkDokPrekeDetEil` | Requires `sKodas`, `sSandelis`, `dSumaV`, `dSumaL`, `nKiekis`. |
+| `service(ServiceLine)` | `PirkDokPaslaugaDetEil` | Requires `sKodas`, `dSumaV`, `dSumaL`, `nKiekis`. |
+| `assertNotSold()` | — | One `purchaseOpFor()` round trip per distinct product code; throws `ConflictException` when a touched product is sold. |
+
+What `header()` deliberately **refuses**, because `PirkDokHeadEil` does not accept
+it for a purchase:
+
+- **`sKlientas`** — a purchase correction cannot change the supplier (*Tik
+  KoregPardDok ir KoregPardRezDok*).
+- **Any operation date** — the node defines none, neither `tData` nor
+  `tTiekejoSFData`. The operation date is not correctable here.
+- **`sObjektas5` / `sObjektas6`** — the node stops at `sObjektas4`.
+- **Waybill (*važtaraštis*) fields** — documented for sales, sales reservations and
+  purchase returns only.
+
+`assertNotSold()` **fails closed**: a product whose purchase history cannot be
+resolved is refused too, since a guard on a destructive call must not pass just
+because the lookup failed. It is deliberately *not* run by `save()` — it costs a
+round trip per code and hides a decision the caller should be making.
+
+Only purchases are covered. The other six `UpdateOperationClass` cases share the
+envelope shape but each has its own `Tik ...` annotations; use
+`operations()->update()` with a hand-built payload for those.
+
 ### Creating an Internal Transfer
 
 ```php
@@ -1105,6 +1257,47 @@ $response = $finvalda->stock()->balancesByGroup(warehouseGroupCode: 'GROUP1');
 // Ordered products
 $response = $finvalda->stock()->orderedProducts();
 ```
+
+#### Which purchase operation holds this stock?
+
+For serialised, quantity-1 stock (a VIN, a serial number), `purchaseOpFor()` answers
+two questions that otherwise get re-derived by every caller: *which purchase
+operation currently holds it*, and *has it been sold since*. Both come from
+`GetPrekesIstorija`.
+
+```php
+$op = $finvalda->stock()->purchaseOpFor('WSM000001TB061527');
+
+if ($op === null) {
+    // never purchased, or the history call failed
+} elseif ($op['sold']) {
+    // sold on $op['sale_date'] via $op['sale_journal'] #$op['sale_op_number']
+} else {
+    // current layer: $op['journal'] #$op['op_number'], warehouse $op['warehouse']
+}
+```
+
+```php
+[
+    'journal' => 'PIRKNAU', 'op_number' => 1421, 'warehouse' => 'WH01',
+    'op_date' => '2026-07-01',
+    'sold' => true, 'sale_journal' => 'PARD1', 'sale_op_number' => 77,
+    'sale_date' => '2026-07-20',   // sale_* are null when sold is false
+]
+```
+
+- **The latest purchase wins.** A re-acquired item has several purchase rows; only
+  the most recent one holds the current stock layer.
+- **A sale counts only when dated at or after that purchase.** An older sale belongs
+  to a previous ownership cycle (bought → sold → bought back).
+- Unlike the rest of this resource it returns a **plain array, not a `Response`**,
+  and **never throws** — it exists to be used as a pre-flight check (see
+  [Correcting a Purchase](#correcting-a-purchase)). `null` means no purchase history
+  or a failed call. Use `products()->history()` for the raw rows.
+- Operation kinds are matched on the literal strings `Pirkimai`/`Pardavimai` in
+  `op_rusis_pav`. The spec documents the column but never enumerates its values, so
+  these are **observed against a live Finvalda, not specified**; an unrecognised kind
+  is ignored rather than guessed at.
 
 ### Clients
 

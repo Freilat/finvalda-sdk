@@ -32,17 +32,19 @@ The Pure endpoint (FvsServicePure.svc) supports both query params and JSON body.
 ## Builders
 All 23 `OperationClass` enum cases have corresponding builders accessible via `Finvalda`:
 - **Sales**: `sale()`, `salesReservation()`, `salesReturn()` — each supports `->short()` for Trumpas* variants
-- **Purchases**: `purchase()`, `purchaseOrder()`, `purchaseReturn()` — each supports `->short()`
+- **Purchases**: `purchase()`, `purchaseOrder()`, `purchaseReturn()` — each supports `->short()`; `purchase()`/`purchaseOrder()` also carry `->additionalCostCodes()` (sPapIslaiduKodas1..4, full variants only)
 - **Transfers & Adjustments**: `internalTransfer()`, `writeOff()`, `capitalization()`, `inventoryCount()`
 - **Payments**: `inflow()`, `disbursement()`, `clearing()`
 - **Production**: `production()` — three line types: finished goods, raw materials, services
 - **Other**: `nonAnalytical()` — general ledger debit/credit entries
 - **UVM**: `uvmSalesReservation()`, `uvmCancellation()`, `uvmPurchaseOrder()`
+- **Corrections**: `purchaseUpdate()` — `PurchaseUpdateBuilder` posts `KoregPirkDok` via `Operations::update()`. Does NOT extend `OperationBuilder` (different envelope: `sZurnalas`/`nNumeris` wrapper + `PirkDokHeadEil` sub-node + `Del*DetEil` delete nodes). DESTRUCTIVE — deletes and re-adds lines, rebuilding the FIFO stock layer; fails with error 4027 once the stock is consumed. Guard with `assertNotSold()` or `Stock::purchaseOpFor()`.
 
 Special build structures: ClearingBuilder (debit/credit lines), ProductionBuilder (3 line types), NonAnalyticalBuilder (accounting entries), UvmCancellationBuilder (cancellation refs), InventoryCountBuilder (flat items with mode wrapper).
 
 ### Line DTOs
-- `ProductLine::make(code, qty)` — fluent DTO for product detail lines with `->warehouse()`, `->amount()`, `->vat()`, `->discount()`, `->object()`, `->objects()`, `->intrastat()`, `->weight()`, `->firstMeasurement()`, `->info()`, `->marked()`, `->set()`
+- `ProductLine::make(code, qty)` — fluent DTO for product detail lines with `->warehouse()`, `->amount()`, `->vat()`, `->discount()`, `->object()`, `->objects()`, `->intrastat()`, `->weight()`, `->firstMeasurement()`, `->info()`, `->marked()`, `->additionalCost()`, `->additionalCosts()`, `->set()`
+- `->additionalCost(slot, currency, local)` writes `dPapIsldSumaV{slot}`/`dPapIsldSumaL{slot}` — product lines only (spec: `Tik PirkDokPrekeDetEil`), slot binds to the header's `sPapIslaiduKodas{slot}`
 - `ServiceLine::make(code, qty)` — fluent DTO for service detail lines (no warehouse/weight/intrastat)
 - Used via `OperationBuilder::product(ProductLine)` and `OperationBuilder::service(ServiceLine)`
 - Existing `addProduct()`/`addService()`/`addProductLine()`/`addServiceLine()` remain for backward compatibility
@@ -69,7 +71,7 @@ docs/                       # API documentation (.doc, .txt, Postman collection)
 ## Available Resources
 | Accessor | Class | Purpose |
 |---|---|---|
-| `->stock()` | Stock | Inventory balances (current, extended, with prices, by group) |
+| `->stock()` | Stock | Inventory balances (current, extended, with prices, by group); `purchaseOpFor()` derives the current purchase op + sold flag from `GetPrekesIstorija` (returns a plain array, never throws) |
 | `->clients()` | Clients | CRUD, accounts, settlements, debt, email |
 | `->products()` | Products | CRUD, warehouse queries, history, images, types |
 | `->services()` | Services | CRUD, types and tags |
