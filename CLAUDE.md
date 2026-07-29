@@ -57,9 +57,10 @@ src/
   FinvaldaConfig.php        # Config DTO (baseUrl, username, password, language, etc.)
   HttpClient.php            # HTTP transport layer (Guzzle, injectable)
   Builders/                 # 18 fluent operation builders (OperationBuilder base + 17 concrete)
-  Enums/                    # AccessResult, Language, ItemClass, OperationClass, OpClass, etc.
+  Enums/                    # AccessResult, Language, ItemClass, OperationClass, OpClass, CredentialMode, etc.
   Exceptions/               # FinvaldaException, AccessDeniedException, ValidationException
   Filters/                  # TransactionFilter, PaymentFilter DTOs
+  Recording/                # Exchange value object + Recorder ring buffer
   Resources/                # 15 resource classes (Stock, Clients, Products, etc.)
   Responses/                # Response, OperationResult
   Laravel/                  # ServiceProvider, Facade

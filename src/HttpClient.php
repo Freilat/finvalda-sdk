@@ -5,19 +5,26 @@ declare(strict_types=1);
 namespace Finvalda;
 
 use Finvalda\Enums\AccessResult;
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\AccessDeniedException;
 use Finvalda\Exceptions\FinvaldaException;
 use Finvalda\Exceptions\NetworkException;
 use Finvalda\Exceptions\ServerException;
+use Finvalda\Recording\Exchange;
+use Finvalda\Recording\Recorder;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
+use Finvalda\Support\BodyTruncator;
 use Finvalda\Support\OutboundNumericNormalizer;
+use Finvalda\Support\Redactor;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\UriResolver;
+use GuzzleHttp\Psr7\Utils;
 use Psr\Log\LoggerInterface;
 
 final class HttpClient
@@ -26,13 +33,16 @@ final class HttpClient
      * Maximum number of bytes of a request/response body included in
      * PSR-3 log records. Larger bodies are truncated with a marker.
      */
-    private const MAX_LOGGED_BODY_BYTES = 100_000;
+    private const MAX_LOGGED_BODY_BYTES = BodyTruncator::MAX_BYTES;
 
     /**
-     * Header and parameter names whose values are replaced with '***' in
-     * debug captures and PSR-3 log context. The wire request is unaffected.
+     * Maximum number of bytes of a request/response body kept in a recorded
+     * Exchange. Recording is bounded by exchange count as well, but a `Reports`
+     * endpoint answers with a PDF, and the Laravel binding is a singleton — so
+     * without a per-body cap a long-lived worker would retain `record_limit`
+     * whole bodies for its lifetime.
      */
-    private const REDACTED_KEYS = ['Password', 'ConnString', 'sPassword'];
+    private const MAX_RECORDED_BODY_BYTES = BodyTruncator::MAX_BYTES;
 
     private ClientInterface $client;
 
@@ -47,6 +57,8 @@ final class HttpClient
     private array $lastRequest = [];
 
     private array $lastResponse = [];
+
+    private ?Recorder $recorder = null;
 
     /**
      * @param FinvaldaConfig $config SDK configuration
@@ -69,6 +81,13 @@ final class HttpClient
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
         );
+
+        if ($this->config->record) {
+            $this->recorder = new Recorder(
+                $this->config->recordLimit,
+                $this->config->recordCredentials,
+            );
+        }
     }
 
     /**
@@ -105,6 +124,41 @@ final class HttpClient
             'request' => $this->lastRequest,
             'response' => $this->lastResponse,
         ];
+    }
+
+    /**
+     * Start recording request/response exchanges in memory. Replaces any
+     * exchanges recorded so far.
+     *
+     * @param  int  $limit  Maximum exchanges kept; the oldest are dropped first
+     * @param  CredentialMode  $credentials  How credential values appear in recordings
+     */
+    public function record(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked): void
+    {
+        $this->recorder = new Recorder($limit, $credentials);
+    }
+
+    /**
+     * Stop recording and drop the recorded exchanges.
+     */
+    public function stopRecording(): void
+    {
+        $this->recorder = null;
+    }
+
+    /**
+     * Recorded exchanges, oldest first. Empty when recording is off.
+     *
+     * @return list<Exchange>
+     */
+    public function recordings(): array
+    {
+        return $this->recorder?->all() ?? [];
+    }
+
+    public function lastRecording(): ?Exchange
+    {
+        return $this->recorder?->last();
     }
 
     public function get(string $endpoint, array $params = []): Response
@@ -226,7 +280,10 @@ final class HttpClient
             $options['json'] = $this->normalizer->normalize($options['json']);
         }
 
-        $doRequest = function () use ($method, $endpoint, $options): string {
+        $attempt = 0;
+
+        $doRequest = function () use ($method, $endpoint, $options, &$attempt): string {
+            $attempt++;
             $startTime = microtime(true);
 
             $this->logRequest($method, $endpoint, $options);
@@ -235,12 +292,19 @@ final class HttpClient
                 $this->lastRequest = [
                     'method' => $method,
                     'url' => rtrim($this->config->baseUrl, '/') . '/' . $endpoint,
-                    'headers' => $this->redact(array_merge($this->buildHeaders(), $options['headers'] ?? [])),
+                    'headers' => Redactor::apply(array_merge($this->buildHeaders(), $options['headers'] ?? [])),
                     'body' => $options['body'] ?? $options['form_params'] ?? $options['json'] ?? null,
                 ];
             }
 
-            $response = $this->client->request($method, $endpoint, $options);
+            try {
+                $response = $this->client->request($method, $endpoint, $options);
+            } catch (GuzzleException $e) {
+                $this->recordFailure($method, $endpoint, $options, $e, microtime(true) - $startTime, $attempt);
+
+                throw $e;
+            }
+
             $body = (string) $response->getBody();
 
             $duration = microtime(true) - $startTime;
@@ -254,6 +318,19 @@ final class HttpClient
                 ];
             }
 
+            $this->recorder?->record(new Exchange(
+                method: $method,
+                url: $this->recordedUrl($endpoint, $options),
+                headers: $this->recordedHeaders($options),
+                body: $this->truncateForRecording($this->recordedBody($options)),
+                statusCode: $response->getStatusCode(),
+                reasonPhrase: $response->getReasonPhrase(),
+                responseHeaders: $response->getHeaders(),
+                responseBody: $this->truncateForRecording($body),
+                durationMs: $duration * 1000,
+                attempt: $attempt,
+            ));
+
             return $body;
         };
 
@@ -262,6 +339,98 @@ final class HttpClient
         }
 
         return $this->withShortestFloatEncoding($doRequest);
+    }
+
+    /**
+     * Record a failed attempt. Captures the response when the failure carried
+     * one (4xx/5xx), otherwise just the transport error.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    private function recordFailure(
+        string $method,
+        string $endpoint,
+        array $options,
+        GuzzleException $e,
+        float $duration,
+        int $attempt,
+    ): void {
+        if ($this->recorder === null) {
+            return;
+        }
+
+        $response = $e instanceof RequestException && $e->hasResponse() ? $e->getResponse() : null;
+
+        $this->recorder->record(new Exchange(
+            method: $method,
+            url: $this->recordedUrl($endpoint, $options),
+            headers: $this->recordedHeaders($options),
+            body: $this->truncateForRecording($this->recordedBody($options)),
+            statusCode: $response?->getStatusCode(),
+            reasonPhrase: $response?->getReasonPhrase(),
+            responseHeaders: $response?->getHeaders() ?? [],
+            responseBody: $response !== null
+                ? $this->truncateForRecording((string) $response->getBody())
+                : null,
+            durationMs: $duration * 1000,
+            error: $e->getMessage(),
+            attempt: $attempt,
+        ));
+    }
+
+    /**
+     * Reproduces the URL Guzzle actually requests: same base-URI resolution
+     * (`Psr7\UriResolver::resolve()`, as used by `Client::buildUri()` — a
+     * leading-slash endpoint replaces the base path instead of appending to
+     * it) and the same query encoding (`http_build_query(..., PHP_QUERY_RFC3986)`,
+     * as used by `Client`'s `query` option handling — spaces become `%20`,
+     * not `+`).
+     *
+     * @param  array<string, mixed>  $options
+     */
+    private function recordedUrl(string $endpoint, array $options): string
+    {
+        $base = Utils::uriFor(rtrim($this->config->baseUrl, '/') . '/');
+        $uri = UriResolver::resolve($base, Utils::uriFor($endpoint));
+
+        $query = $options['query'] ?? [];
+
+        if (is_array($query) && $query !== []) {
+            $uri = $uri->withQuery(http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+        }
+
+        return (string) $uri;
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @return array<string, string>
+     */
+    private function recordedHeaders(array $options): array
+    {
+        /** @var array<string, string> $headers */
+        $headers = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+
+        return $headers;
+    }
+
+    /**
+     * The request body as handed to Guzzle. JSON is encoded with default flags
+     * to match Guzzle's own encoding of the `json` option.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    private function recordedBody(array $options): ?string
+    {
+        if (isset($options['body']) && is_string($options['body'])) {
+            return $options['body'];
+        }
+
+        if (isset($options['json'])) {
+            return json_encode($options['json']) ?: null;
+        }
+
+        return null;
     }
 
     private function logRequest(string $method, string $endpoint, array $options): void
@@ -276,24 +445,10 @@ final class HttpClient
         $this->logger->debug('Finvalda API request', [
             'method' => $method,
             'endpoint' => $endpoint,
-            'params' => $this->redact($options['query'] ?? $options['json'] ?? []),
+            'params' => Redactor::apply($options['query'] ?? $options['json'] ?? []),
             'has_body' => isset($options['body']) || isset($options['json']),
             'body' => $this->truncateForLog(is_string($body) ? $body : null),
         ]);
-    }
-
-    /**
-     * Replace sensitive values with '***' for logging/debug output.
-     */
-    private function redact(array $values): array
-    {
-        foreach (self::REDACTED_KEYS as $key) {
-            if (array_key_exists($key, $values)) {
-                $values[$key] = '***';
-            }
-        }
-
-        return $values;
     }
 
     private function logResponse(string $method, string $endpoint, int $statusCode, float $duration, string $body): void
@@ -313,13 +468,12 @@ final class HttpClient
 
     private function truncateForLog(?string $body): ?string
     {
-        if ($body === null || strlen($body) <= self::MAX_LOGGED_BODY_BYTES) {
-            return $body;
-        }
+        return BodyTruncator::truncate($body, self::MAX_LOGGED_BODY_BYTES);
+    }
 
-        $omitted = strlen($body) - self::MAX_LOGGED_BODY_BYTES;
-
-        return substr($body, 0, self::MAX_LOGGED_BODY_BYTES) . "... [truncated {$omitted} bytes]";
+    private function truncateForRecording(?string $body): ?string
+    {
+        return BodyTruncator::truncate($body, self::MAX_RECORDED_BODY_BYTES);
     }
 
     /**

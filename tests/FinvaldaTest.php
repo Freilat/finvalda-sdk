@@ -6,6 +6,7 @@ namespace Finvalda\Tests;
 
 use Finvalda\Finvalda;
 use Finvalda\FinvaldaConfig;
+use Finvalda\HttpClient;
 use Finvalda\Resources\Clients;
 use Finvalda\Resources\Descriptions;
 use Finvalda\Resources\Documents;
@@ -20,6 +21,10 @@ use Finvalda\Resources\Reports;
 use Finvalda\Resources\Services;
 use Finvalda\Resources\Stock;
 use Finvalda\Resources\Transactions;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use PHPUnit\Framework\TestCase;
 
 class FinvaldaTest extends TestCase
@@ -113,5 +118,29 @@ class FinvaldaTest extends TestCase
         $stock2 = $this->finvalda->stock();
 
         $this->assertSame($stock1, $stock2);
+    }
+
+    public function test_record_and_recordings_delegate_to_the_http_client(): void
+    {
+        $mock = new MockHandler([
+            new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success'], JSON_THROW_ON_ERROR)),
+        ]);
+        $guzzle = new Client(['handler' => HandlerStack::create($mock)]);
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com/FvsServicePure.svc',
+            username: 'demo',
+            password: 'secret',
+        );
+
+        $finvalda = new Finvalda($config, new HttpClient($config, $guzzle));
+
+        $this->assertSame($finvalda, $finvalda->record(limit: 5));
+
+        $finvalda->products()->all();
+
+        $this->assertCount(1, $finvalda->recordings());
+        $this->assertNotNull($finvalda->lastRecording());
+        $this->assertSame($finvalda, $finvalda->stopRecording());
+        $this->assertSame([], $finvalda->recordings());
     }
 }
