@@ -23,6 +23,8 @@ use Finvalda\Builders\UvmCancellationBuilder;
 use Finvalda\Builders\UvmPurchaseOrderBuilder;
 use Finvalda\Builders\UvmSalesReservationBuilder;
 use Finvalda\Builders\WriteOffBuilder;
+use Finvalda\Enums\CredentialMode;
+use Finvalda\Recording\Exchange;
 use Finvalda\Resources\Clients;
 use Finvalda\Resources\Descriptions;
 use Finvalda\Resources\Documents;
@@ -105,6 +107,48 @@ final class Finvalda
     public function getLastDebugInfo(): array
     {
         return $this->http->getLastDebugInfo();
+    }
+
+    /**
+     * Start recording request/response exchanges in memory. Replaces any
+     * exchanges recorded so far.
+     *
+     * @param  int  $limit  Maximum exchanges kept; the oldest are dropped first
+     * @param  CredentialMode  $credentials  How credential values appear in recordings
+     * @return $this
+     */
+    public function record(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked): self
+    {
+        $this->http->record($limit, $credentials);
+
+        return $this;
+    }
+
+    /**
+     * Stop recording and drop the recorded exchanges.
+     *
+     * @return $this
+     */
+    public function stopRecording(): self
+    {
+        $this->http->stopRecording();
+
+        return $this;
+    }
+
+    /**
+     * Recorded exchanges, oldest first. Empty when recording is off.
+     *
+     * @return list<Exchange>
+     */
+    public function recordings(): array
+    {
+        return $this->http->recordings();
+    }
+
+    public function lastRecording(): ?Exchange
+    {
+        return $this->http->lastRecording();
     }
 
     /**

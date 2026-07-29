@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Finvalda;
 
 use Finvalda\Enums\AccessResult;
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\AccessDeniedException;
 use Finvalda\Exceptions\FinvaldaException;
 use Finvalda\Exceptions\NetworkException;
 use Finvalda\Exceptions\ServerException;
+use Finvalda\Recording\Exchange;
+use Finvalda\Recording\Recorder;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
@@ -42,6 +45,8 @@ final class HttpClient
     private array $lastRequest = [];
 
     private array $lastResponse = [];
+
+    private ?Recorder $recorder = null;
 
     /**
      * @param FinvaldaConfig $config SDK configuration
@@ -100,6 +105,41 @@ final class HttpClient
             'request' => $this->lastRequest,
             'response' => $this->lastResponse,
         ];
+    }
+
+    /**
+     * Start recording request/response exchanges in memory. Replaces any
+     * exchanges recorded so far.
+     *
+     * @param  int  $limit  Maximum exchanges kept; the oldest are dropped first
+     * @param  CredentialMode  $credentials  How credential values appear in recordings
+     */
+    public function record(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked): void
+    {
+        $this->recorder = new Recorder($limit, $credentials);
+    }
+
+    /**
+     * Stop recording and drop the recorded exchanges.
+     */
+    public function stopRecording(): void
+    {
+        $this->recorder = null;
+    }
+
+    /**
+     * Recorded exchanges, oldest first. Empty when recording is off.
+     *
+     * @return list<Exchange>
+     */
+    public function recordings(): array
+    {
+        return $this->recorder?->all() ?? [];
+    }
+
+    public function lastRecording(): ?Exchange
+    {
+        return $this->recorder?->last();
     }
 
     public function get(string $endpoint, array $params = []): Response
@@ -221,7 +261,10 @@ final class HttpClient
             $options['json'] = $this->normalizer->normalize($options['json']);
         }
 
-        $doRequest = function () use ($method, $endpoint, $options): string {
+        $attempt = 0;
+
+        $doRequest = function () use ($method, $endpoint, $options, &$attempt): string {
+            $attempt++;
             $startTime = microtime(true);
 
             $this->logRequest($method, $endpoint, $options);
@@ -235,7 +278,14 @@ final class HttpClient
                 ];
             }
 
-            $response = $this->client->request($method, $endpoint, $options);
+            try {
+                $response = $this->client->request($method, $endpoint, $options);
+            } catch (GuzzleException $e) {
+                $this->recordFailure($method, $endpoint, $options, $e, microtime(true) - $startTime, $attempt);
+
+                throw $e;
+            }
+
             $body = (string) $response->getBody();
 
             $duration = microtime(true) - $startTime;
@@ -249,6 +299,19 @@ final class HttpClient
                 ];
             }
 
+            $this->recorder?->record(new Exchange(
+                method: $method,
+                url: $this->recordedUrl($endpoint, $options),
+                headers: $this->recordedHeaders($options),
+                body: $this->recordedBody($options),
+                statusCode: $response->getStatusCode(),
+                reasonPhrase: $response->getReasonPhrase(),
+                responseHeaders: $response->getHeaders(),
+                responseBody: $body,
+                durationMs: $duration * 1000,
+                attempt: $attempt,
+            ));
+
             return $body;
         };
 
@@ -257,6 +320,87 @@ final class HttpClient
         }
 
         return $this->withShortestFloatEncoding($doRequest);
+    }
+
+    /**
+     * Record a failed attempt. Captures the response when the failure carried
+     * one (4xx/5xx), otherwise just the transport error.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    private function recordFailure(
+        string $method,
+        string $endpoint,
+        array $options,
+        GuzzleException $e,
+        float $duration,
+        int $attempt,
+    ): void {
+        if ($this->recorder === null) {
+            return;
+        }
+
+        $response = $e instanceof RequestException && $e->hasResponse() ? $e->getResponse() : null;
+
+        $this->recorder->record(new Exchange(
+            method: $method,
+            url: $this->recordedUrl($endpoint, $options),
+            headers: $this->recordedHeaders($options),
+            body: $this->recordedBody($options),
+            statusCode: $response?->getStatusCode(),
+            reasonPhrase: $response?->getReasonPhrase(),
+            responseHeaders: $response?->getHeaders() ?? [],
+            responseBody: $response !== null ? (string) $response->getBody() : null,
+            durationMs: $duration * 1000,
+            error: $e->getMessage(),
+            attempt: $attempt,
+        ));
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     */
+    private function recordedUrl(string $endpoint, array $options): string
+    {
+        $url = rtrim($this->config->baseUrl, '/') . '/' . ltrim($endpoint, '/');
+        $query = $options['query'] ?? [];
+
+        if (is_array($query) && $query !== []) {
+            return $url . '?' . http_build_query($query);
+        }
+
+        return $url;
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @return array<string, string>
+     */
+    private function recordedHeaders(array $options): array
+    {
+        /** @var array<string, string> $headers */
+        $headers = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+
+        return $headers;
+    }
+
+    /**
+     * The request body as handed to Guzzle. JSON is encoded with default flags
+     * to match Guzzle's own encoding of the `json` option.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    private function recordedBody(array $options): ?string
+    {
+        if (isset($options['body']) && is_string($options['body'])) {
+            return $options['body'];
+        }
+
+        if (isset($options['json'])) {
+            return json_encode($options['json']) ?: null;
+        }
+
+        return null;
     }
 
     private function logRequest(string $method, string $endpoint, array $options): void
