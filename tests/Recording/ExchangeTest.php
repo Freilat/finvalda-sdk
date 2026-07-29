@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda\Tests\Recording;
 
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Recording\Exchange;
 use PHPUnit\Framework\TestCase;
 
@@ -209,5 +210,205 @@ class ExchangeTest extends TestCase
 
         $this->assertStringContainsString("-H 'Content-Type: text/xml'", $curl);
         $this->assertStringNotContainsString('application/json', $curl);
+    }
+
+    public function test_masked_mode_masks_credential_headers(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes',
+            headers: ['UserName' => 'demo', 'Password' => 'secret', 'ConnString' => 'Server=db'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        $this->assertSame('***', $masked->headers['Password']);
+        $this->assertSame('***', $masked->headers['ConnString']);
+        $this->assertSame('demo', $masked->headers['UserName']);
+        // Original is untouched
+        $this->assertSame('secret', $exchange->headers['Password']);
+    }
+
+    public function test_env_mode_replaces_credentials_with_placeholders(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes',
+            headers: ['UserName' => 'demo', 'Password' => 'secret'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $env = $exchange->withCredentials(CredentialMode::Env);
+
+        $this->assertSame('$FVS_PASSWORD', $env->headers['Password']);
+        $this->assertSame('demo', $env->headers['UserName']);
+        $this->assertStringNotContainsString('secret', (string) $env);
+    }
+
+    public function test_real_mode_returns_the_exchange_unchanged(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes',
+            headers: ['Password' => 'secret'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $this->assertSame('secret', $exchange->withCredentials(CredentialMode::Real)->headers['Password']);
+    }
+
+    public function test_env_mode_curl_interpolates_the_placeholder(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes',
+            headers: ['UserName' => 'demo', 'Password' => 'secret'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $curl = $exchange->withCredentials(CredentialMode::Env)->toCurl();
+
+        // Literal chunk single-quoted, placeholder double-quoted so the shell expands it
+        $this->assertStringContainsString('-H \'Password: \'"$FVS_PASSWORD"', $curl);
+        $this->assertStringContainsString("-H 'UserName: demo'", $curl);
+    }
+
+    public function test_env_mode_curl_interpolates_a_placeholder_inside_a_json_body(): void
+    {
+        $exchange = new Exchange(
+            method: 'POST',
+            url: 'https://example.com/FvsServicePure.svc/SetFvsUser',
+            headers: [],
+            body: '{"sKodas":"ADMIN","sPassword":"secret"}',
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $curl = $exchange->withCredentials(CredentialMode::Env)->toCurl();
+
+        $this->assertStringNotContainsString('secret', $curl);
+        $this->assertStringContainsString('\'{"sKodas":"ADMIN","sPassword":"\'"$FVS_SPASSWORD"\'"}\'', $curl);
+    }
+
+    public function test_masked_mode_masks_credentials_in_the_url_query(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/SetFvsUserPassword?sKodas=ADMIN&sPassword=secret',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Masked)->url;
+
+        $this->assertStringNotContainsString('secret', $url);
+        $this->assertStringContainsString('sPassword=%2A%2A%2A', $url);
+        $this->assertStringContainsString('sKodas=ADMIN', $url);
+    }
+
+    public function test_env_mode_substitutes_credentials_in_the_url_query(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/SetFvsUserPassword?sKodas=ADMIN&sPassword=secret',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Env)->url;
+
+        $this->assertStringNotContainsString('secret', $url);
+        // http_build_query percent-encodes the placeholder; decode before asserting
+        $this->assertStringContainsString('sPassword=' . urlencode('$FVS_SPASSWORD'), $url);
+    }
+
+    public function test_masked_mode_masks_credentials_in_a_json_body(): void
+    {
+        $exchange = new Exchange(
+            method: 'POST',
+            url: 'https://example.com/FvsServicePure.svc/SetFvsUser',
+            headers: [],
+            body: '{"sKodas":"ADMIN","sPassword":"secret"}',
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $body = $exchange->withCredentials(CredentialMode::Masked)->body;
+
+        $this->assertStringNotContainsString('secret', (string) $body);
+        $this->assertStringContainsString('"sPassword":"***"', (string) $body);
+    }
+
+    public function test_substitution_leaves_a_credential_free_body_byte_identical(): void
+    {
+        $exchange = $this->operationExchange();
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        $this->assertSame($exchange->body, $masked->body);
+        $this->assertSame($exchange->url, $masked->url);
+    }
+
+    public function test_substitution_preserves_response_and_attempt_data(): void
+    {
+        $exchange = new Exchange(
+            method: 'POST',
+            url: 'https://example.com/FvsServicePure.svc/InsertNewOperation',
+            headers: ['Password' => 'secret'],
+            body: null,
+            statusCode: 500,
+            reasonPhrase: 'Internal Server Error',
+            responseHeaders: ['X-Trace' => ['abc']],
+            responseBody: 'boom',
+            durationMs: 7.5,
+            error: 'Server error: 500',
+            attempt: 3,
+        );
+
+        $substituted = $exchange->withCredentials(CredentialMode::Masked);
+
+        $this->assertSame(500, $substituted->statusCode);
+        $this->assertSame('Internal Server Error', $substituted->reasonPhrase);
+        $this->assertSame(['X-Trace' => ['abc']], $substituted->responseHeaders);
+        $this->assertSame('boom', $substituted->responseBody);
+        $this->assertSame(7.5, $substituted->durationMs);
+        $this->assertSame('Server error: 500', $substituted->error);
+        $this->assertSame(3, $substituted->attempt);
     }
 }

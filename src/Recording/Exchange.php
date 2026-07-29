@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Finvalda\Recording;
 
+use Finvalda\Enums\CredentialMode;
+use Finvalda\Support\Redactor;
 use Stringable;
 
 /**
@@ -122,9 +124,116 @@ final class Exchange implements Stringable
     }
 
     /**
-     * Wrap a value in single quotes for a POSIX shell.
+     * A copy whose headers, URL query, and JSON body carry credential values
+     * substituted per the given mode. The URL and body are returned unchanged
+     * when they carry no credentials.
+     */
+    public function withCredentials(CredentialMode $mode): self
+    {
+        if ($mode === CredentialMode::Real) {
+            return $this;
+        }
+
+        /** @var array<string, string> $headers */
+        $headers = $this->substitute($this->headers, $mode);
+
+        return new self(
+            method: $this->method,
+            url: $this->substituteUrl($this->url, $mode),
+            headers: $headers,
+            body: $this->substituteBody($this->body, $mode),
+            statusCode: $this->statusCode,
+            reasonPhrase: $this->reasonPhrase,
+            responseHeaders: $this->responseHeaders,
+            responseBody: $this->responseBody,
+            durationMs: $this->durationMs,
+            error: $this->error,
+            attempt: $this->attempt,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function substitute(array $values, CredentialMode $mode): array
+    {
+        return $mode === CredentialMode::Env
+            ? Redactor::applyPlaceholders($values)
+            : Redactor::apply($values);
+    }
+
+    private function substituteUrl(string $url, CredentialMode $mode): string
+    {
+        $query = parse_url($url, PHP_URL_QUERY);
+
+        if (! is_string($query) || $query === '') {
+            return $url;
+        }
+
+        $params = [];
+        parse_str($query, $params);
+        $substituted = $this->substitute($params, $mode);
+
+        if ($substituted === $params) {
+            return $url;
+        }
+
+        return str_replace($query, http_build_query($substituted), $url);
+    }
+
+    private function substituteBody(?string $body, CredentialMode $mode): ?string
+    {
+        if ($body === null) {
+            return null;
+        }
+
+        $decoded = json_decode($body, true);
+
+        if (! is_array($decoded)) {
+            return $body;
+        }
+
+        $substituted = $this->substitute($decoded, $mode);
+
+        if ($substituted === $decoded) {
+            return $body;
+        }
+
+        return json_encode($substituted) ?: $body;
+    }
+
+    /**
+     * Quote a value for a POSIX shell. Literal chunks are single-quoted and
+     * $FVS_* placeholders double-quoted, then concatenated, so a placeholder
+     * expands even when it sits inside a JSON body:
+     * '{"sPassword":"'"$FVS_SPASSWORD"'"}'
      */
     private function quote(string $value): string
+    {
+        $parts = preg_split(
+            '/(\$FVS_[A-Z_]+)/',
+            $value,
+            -1,
+            PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY,
+        );
+
+        if ($parts === false || $parts === []) {
+            return $this->singleQuote($value);
+        }
+
+        $quoted = '';
+
+        foreach ($parts as $part) {
+            $quoted .= str_starts_with($part, '$FVS_')
+                ? '"' . $part . '"'
+                : $this->singleQuote($part);
+        }
+
+        return $quoted;
+    }
+
+    private function singleQuote(string $value): string
     {
         return "'" . str_replace("'", "'\\''", $value) . "'";
     }
