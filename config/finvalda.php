@@ -121,4 +121,22 @@ return [
         'max_delay_ms' => (int) env('FINVALDA_RETRY_MAX_DELAY_MS', 10000),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Request Recording
+    |--------------------------------------------------------------------------
+    |
+    | Keep the last N request/response exchanges in memory for inspection via
+    | $finvalda->recordings(). Off by default.
+    |
+    | record_credentials controls how credential values appear in recordings:
+    | 'masked' (default) prints ***, 'env' prints shell placeholders such as
+    | $FVS_PASSWORD so curl output stays runnable without exposing the secret,
+    | and 'real' prints the values verbatim — never use 'real' in production.
+    |
+    */
+    'record' => (bool) env('FINVALDA_RECORD', false),
+    'record_limit' => (int) env('FINVALDA_RECORD_LIMIT', 20),
+    'record_credentials' => env('FINVALDA_RECORD_CREDENTIALS', 'masked'),
+
 ];

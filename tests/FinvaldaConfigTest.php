@@ -2,6 +2,7 @@
 
 namespace Finvalda\Tests;
 
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
 use Finvalda\FinvaldaConfig;
 use PHPUnit\Framework\TestCase;
@@ -149,5 +150,46 @@ class FinvaldaConfigTest extends TestCase
             password: 'pass',
             floatPrecision: 15,
         );
+    }
+
+    public function test_recording_is_off_by_default(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'demo',
+            password: 'secret',
+        );
+
+        $this->assertFalse($config->record);
+        $this->assertSame(20, $config->recordLimit);
+        $this->assertSame(CredentialMode::Masked, $config->recordCredentials);
+    }
+
+    public function test_from_array_maps_recording_keys(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'record' => true,
+            'record_limit' => 5,
+            'record_credentials' => 'env',
+        ]);
+
+        $this->assertTrue($config->record);
+        $this->assertSame(5, $config->recordLimit);
+        $this->assertSame(CredentialMode::Env, $config->recordCredentials);
+    }
+
+    public function test_from_array_falls_back_to_masked_for_an_unknown_credential_mode(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'record_credentials' => 'nonsense',
+        ]);
+
+        $this->assertSame(CredentialMode::Masked, $config->recordCredentials);
     }
 }

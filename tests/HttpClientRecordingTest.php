@@ -304,4 +304,62 @@ class HttpClientRecordingTest extends TestCase
         $this->assertSame($sentUri, $exchange->url);
         $this->assertSame('https://example.com/GetPrekes', $exchange->url);
     }
+
+    public function test_recording_can_be_enabled_from_config(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com/FvsServicePure.svc',
+            username: 'demo',
+            password: 'secret-password',
+            record: true,
+            recordLimit: 2,
+        );
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ], $config);
+
+        $httpClient->get('GetPrekes');
+
+        $this->assertCount(1, $httpClient->recordings());
+        $this->assertSame('***', $httpClient->lastRecording()?->headers['Password']);
+    }
+
+    public function test_config_can_request_env_placeholders(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com/FvsServicePure.svc',
+            username: 'demo',
+            password: 'secret-password',
+            record: true,
+            recordCredentials: CredentialMode::Env,
+        );
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ], $config);
+
+        $httpClient->get('GetPrekes');
+
+        $this->assertSame('$FVS_PASSWORD', $httpClient->lastRecording()?->headers['Password']);
+    }
+
+    public function test_config_can_request_credential_capture(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com/FvsServicePure.svc',
+            username: 'demo',
+            password: 'secret-password',
+            record: true,
+            recordCredentials: CredentialMode::Real,
+        );
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ], $config);
+
+        $httpClient->get('GetPrekes');
+
+        $this->assertSame('secret-password', $httpClient->lastRecording()?->headers['Password']);
+    }
 }

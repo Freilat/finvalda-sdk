@@ -71,6 +71,13 @@ final class HttpClient
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
         );
+
+        if ($this->config->record) {
+            $this->recorder = new Recorder(
+                $this->config->recordLimit,
+                $this->config->recordCredentials,
+            );
+        }
     }
 
     /**

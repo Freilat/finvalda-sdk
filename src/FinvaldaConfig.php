@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda;
 
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
 use Finvalda\Retry\RetryPolicy;
 use InvalidArgumentException;
@@ -26,6 +27,9 @@ final class FinvaldaConfig
         public readonly ?RetryPolicy $retry = null,
         public readonly bool $normalizeFloats = true,
         public readonly int $floatPrecision = 10,
+        public readonly bool $record = false,
+        public readonly int $recordLimit = 20,
+        public readonly CredentialMode $recordCredentials = CredentialMode::Masked,
     ) {
         if ($this->baseUrl === '') {
             throw new InvalidArgumentException('Finvalda base URL is required');
@@ -50,6 +54,9 @@ final class FinvaldaConfig
      * The optional `retry` sub-array maps to a RetryPolicy when its `enabled`
      * key is truthy: ['enabled' => true, 'max_attempts' => 3, 'delay_ms' => 100,
      * 'multiplier' => 2.0, 'max_delay_ms' => 10000].
+     *
+     * The optional `record_credentials` key accepts 'masked' (default), 'env', or
+     * 'real'; anything else falls back to 'masked'.
      *
      * @param  array<string, mixed>  $config
      */
@@ -82,6 +89,10 @@ final class FinvaldaConfig
             retry: $retry,
             normalizeFloats: (bool) ($config['normalize_floats'] ?? true),
             floatPrecision: (int) ($config['float_precision'] ?? 10),
+            record: (bool) ($config['record'] ?? false),
+            recordLimit: (int) ($config['record_limit'] ?? 20),
+            recordCredentials: CredentialMode::tryFrom((string) ($config['record_credentials'] ?? ''))
+                ?? CredentialMode::Masked,
         );
     }
 }
