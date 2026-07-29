@@ -22,7 +22,7 @@ value objects that can render themselves.
 | Decision | Choice |
 |---|---|
 | Consumption | History of the last N exchanges (ring buffer) |
-| Credentials | Redacted by default, opt in to real values |
+| Credentials | Three modes: masked (default), shell env placeholders, real values |
 | Existing debug mode | Untouched; recording lives alongside |
 | Default rendering | HTTP text, pretty JSON, embedded `xmlstring` payload expanded |
 | Enablement | Runtime API plus `config/finvalda.php` / env |
@@ -49,7 +49,9 @@ New namespace `Finvalda\Recording`.
 
 ### `Exchange`
 
-Immutable value object for **one request attempt** and its outcome.
+Immutable value object for **one request attempt** and its outcome. Exposes
+`withCredentials(CredentialMode $mode): self`, returning a copy whose headers, URL query,
+and JSON body carry masked values, env placeholders, or the originals.
 
 Request side:
 
@@ -76,33 +78,53 @@ returning `['request' => ['method', 'url', 'headers', 'body'], 'response' => ['s
 
 Bounded ring buffer.
 
-- `__construct(int $limit = 20, bool $credentials = false)`
+- `__construct(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked)`
 - `record(Exchange $exchange): void` — appends, trimming to `limit`
 - `all(): list<Exchange>` — oldest to newest
 - `last(): ?Exchange`
 
-Redaction is applied **at capture time**, before the `Exchange` is constructed. With
-default settings the real password never enters the buffer.
+Credential substitution is applied **at capture time**, so under the default mode the real
+password never enters the buffer.
+
+### `Finvalda\Enums\CredentialMode`
+
+String-backed enum controlling how credential values appear in recordings:
+
+| Case | Value | Effect |
+|---|---|---|
+| `Masked` | `masked` | Values become `***`. Default. |
+| `Env` | `env` | Values become shell placeholders (`$FVS_PASSWORD`), so curl output runs after exporting them and the secret is never printed. |
+| `Real` | `real` | Values kept verbatim. Runnable curl; never for production logs. |
+
+Lives in `Finvalda\Enums` alongside the SDK's other enums.
 
 ### `Finvalda\Support\Redactor`
 
 `HttpClient::REDACTED_KEYS` and `HttpClient::redact()` move here so log redaction and
-recording redaction cannot drift. `HttpClient` delegates; existing log behaviour is
-unchanged (top-level keys only: `Password`, `ConnString`, `sPassword`).
+recording substitution cannot drift. `HttpClient` delegates; existing log behaviour is
+unchanged (top-level keys only: `Password`, `ConnString`, `sPassword`), always masked —
+env placeholders apply to recordings only, never to PSR-3 logs.
 
-`sPassword` matters for query params too — `References::updateUserPassword()` sends it as
-a GET parameter.
+`Redactor` exposes `apply()` (mask) and `applyPlaceholders()` (env placeholders), with a
+per-key placeholder map: `Password` → `$FVS_PASSWORD`, `ConnString` → `$FVS_CONN_STRING`,
+`sPassword` → `$FVS_SPASSWORD`. `sPassword` gets its own placeholder because it is a
+different secret — the target user's new password in `References::updateUserPassword()` —
+which also travels as a GET query parameter, so URL queries are substituted too.
 
 ## Public API
 
 On `Finvalda`, mirrored on `HttpClient`:
 
 ```php
-$finvalda->record();                                // limit 20, redacted
-$finvalda->record(limit: 5, credentials: true);     // real values, runnable curl
-$finvalda->recordings();                            // Exchange[] oldest → newest
-$finvalda->lastRecording();                         // ?Exchange
-$finvalda->stopRecording();                         // stop and drop the buffer
+use Finvalda\Enums\CredentialMode;
+
+$finvalda->record();                                              // limit 20, masked
+$finvalda->record(limit: 5);
+$finvalda->record(credentials: CredentialMode::Env);              // $FVS_PASSWORD placeholders
+$finvalda->record(credentials: CredentialMode::Real);            // real values
+$finvalda->recordings();                                          // Exchange[] oldest → newest
+$finvalda->lastRecording();                                       // ?Exchange
+$finvalda->stopRecording();                                       // stop and drop the buffer
 ```
 
 On `Finvalda`, `record()` and `stopRecording()` return `$this` for chaining, matching
@@ -115,21 +137,22 @@ On `Finvalda`, `record()` and `stopRecording()` return `$this` for chaining, mat
 
 - `bool $record = false`
 - `int $recordLimit = 20`
-- `bool $recordCredentials = false`
+- `CredentialMode $recordCredentials = CredentialMode::Masked`
 
-`fromArray()` maps `record`, `record_limit`, `record_credentials`.
+`fromArray()` maps `record`, `record_limit`, and `record_credentials` (via
+`CredentialMode::tryFrom()`, falling back to `Masked` for any unrecognised value).
 
 `config/finvalda.php`:
 
 ```php
 'record' => (bool) env('FINVALDA_RECORD', false),
 'record_limit' => (int) env('FINVALDA_RECORD_LIMIT', 20),
-'record_credentials' => (bool) env('FINVALDA_RECORD_CREDENTIALS', false),
+'record_credentials' => env('FINVALDA_RECORD_CREDENTIALS', 'masked'), // masked|env|real
 ```
 
 When `record` is true, `HttpClient` builds the `Recorder` in its constructor, so a Laravel
-app enables recording without touching code. `record_credentials` is documented as
-never-in-production.
+app enables recording without touching code. `record_credentials=real` is documented as
+never-in-production; `env` is the safe choice when you want runnable curl.
 
 ## Rendering
 
@@ -185,7 +208,25 @@ curl -X POST 'https://host/FvsServicePure.svc/InsertNewOperation' \
 - No `-d` for requests without a body.
 - `Content-Type: application/json` is **inferred** — Guzzle adds it for `json` bodies; the
   SDK does not set it in `buildHeaders()`. Noted in the README.
-- Under default redaction the curl needs the real password substituted before it runs.
+- Under the default masked mode the curl needs the real password substituted before it runs.
+- "Byte-exact" means byte-exact except for substituted credentials: substitution rewrites
+  the URL query and re-encodes a JSON body only when it actually contains a credential key
+  (`sPassword`). Bodies without one are stored untouched.
+
+Under `CredentialMode::Env` the quoting is placeholder-aware, so the command is runnable
+after exporting the variables and the secret never appears:
+
+```
+curl -X POST 'https://host/FvsServicePure.svc/InsertNewOperation' \
+  -H 'UserName: demo' \
+  -H 'Password: '"$FVS_PASSWORD" \
+  -H 'Accept: application/json'
+```
+
+Quoting is driven by the placeholder text, not by a mode flag on the `Exchange`: values are
+split on `$FVS_[A-Z_]+` tokens, literal chunks are single-quoted and placeholder tokens are
+double-quoted, then concatenated. This also keeps a JSON body correct
+(`-d '{"sPassword":"'"$FVS_SPASSWORD"'"}'`).
 
 ## Capture semantics
 
@@ -224,5 +265,7 @@ curl -X POST 'https://host/FvsServicePure.svc/InsertNewOperation' \
 
 - Callback/stream sinks for live dumping.
 - Persisting recordings to disk.
-- Env-var placeholder substitution in curl output.
+- Reading the placeholder values from the environment inside the SDK — placeholders are
+  emitted for the shell to resolve, nothing is looked up in `getenv()`.
+- Configurable placeholder names.
 - Replacing or deprecating `setDebug()` / `getLastDebugInfo()`.
