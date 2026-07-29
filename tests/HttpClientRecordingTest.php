@@ -17,6 +17,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 class HttpClientRecordingTest extends TestCase
@@ -419,6 +420,86 @@ class HttpClientRecordingTest extends TestCase
         $this->assertStringNotContainsString('topsecret123', (string) json_encode($exchange->toArray()));
         $this->assertStringNotContainsString('secret-password', (string) json_encode($exchange->toArray()));
         $this->assertStringContainsString('sPassword=$FVS_SPASSWORD', (string) $exchange->error);
+    }
+
+    /**
+     * Guzzle embeds the percent-ENCODED query string in its exception messages,
+     * so scrubbing only the decoded value leaves any password with a character
+     * outside the unreserved set recoverable with a single urldecode().
+     *
+     * @return list<array{CredentialMode}>
+     */
+    public static function credentialModeProvider(): array
+    {
+        return [
+            'masked' => [CredentialMode::Masked],
+            'env' => [CredentialMode::Env],
+        ];
+    }
+
+    #[DataProvider('credentialModeProvider')]
+    public function test_a_percent_encoded_credential_does_not_survive_in_the_error_message(
+        CredentialMode $mode,
+    ): void {
+        $secret = 'p@ss word!';
+
+        // A 500 response, so Guzzle's own error middleware builds the message
+        $httpClient = $this->createHttpClient([new Response(500, [], 'boom')]);
+
+        $httpClient->record(credentials: $mode);
+
+        try {
+            $this->lookUpUser($httpClient, 'bob', $secret);
+            $this->fail('Expected a FinvaldaException');
+        } catch (FinvaldaException) {
+            // expected
+        }
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertStringNotContainsString($secret, (string) $exchange->error);
+        $this->assertStringNotContainsString($secret, (string) $exchange);
+        $this->assertStringNotContainsString($secret, $exchange->toCurl());
+        $this->assertStringNotContainsString($secret, (string) json_encode($exchange->toArray()));
+        // The encoded form must be gone too, not merely unreadable
+        $this->assertStringNotContainsString('p%40ss%20word%21', (string) $exchange->error);
+        $this->assertStringNotContainsString($secret, urldecode((string) $exchange->error));
+        $this->assertStringNotContainsString(
+            $secret,
+            urldecode((string) json_encode($exchange->toArray())),
+        );
+        // Still diagnostically useful
+        $this->assertStringContainsString('500 Internal Server Error', (string) $exchange->error);
+    }
+
+    public function test_a_json_escaped_credential_echoed_back_is_scrubbed(): void
+    {
+        $secret = 'conn/pass"1';
+
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com/FvsServicePure.svc',
+            username: 'demo',
+            password: $secret,
+        );
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success', 'echo' => $secret])),
+        ], $config);
+
+        $httpClient->record();
+        $httpClient->get('GetPrekes');
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        // The wire form is JSON-escaped: conn\/pass\"1
+        $this->assertStringNotContainsString('conn\\/pass\\"1', (string) $exchange->responseBody);
+        $this->assertStringNotContainsString($secret, (string) $exchange->responseBody);
+        $this->assertStringContainsString('"echo":"***"', (string) $exchange->responseBody);
+        // Pretty-printing re-encodes with unescaped slashes, so check that form too
+        $this->assertStringNotContainsString('conn/pass', (string) $exchange);
+        $this->assertStringNotContainsString($secret, (string) json_encode($exchange->toArray()));
     }
 
     public function test_a_response_echoing_the_credential_does_not_leak_it(): void

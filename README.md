@@ -329,8 +329,10 @@ curl -X POST 'https://your-server.com/FvsServicePure.svc/InsertNewOperation' \
 ```
 
 The placeholders are `$FVS_PASSWORD` (the `Password` header), `$FVS_CONN_STRING` (the
-`ConnString` header), and `$FVS_SPASSWORD` (the `sPassword` parameter used when changing
-another user's password). The SDK only emits them — it never reads them from the environment.
+`ConnString` header), and `$FVS_SPASSWORD` (the `sPassword` query parameter that
+`$finvalda->references()->user()` sends to `GetFvsUser` — a different secret from the
+connection password, which is why it gets its own name). The SDK only emits them — it never
+reads them from the environment.
 
 Each `Exchange` exposes `method`, `url`, `headers`, `body`, `statusCode`, `reasonPhrase`,
 `responseHeaders`, `responseBody`, `durationMs`, `error`, and `attempt`, plus `toString()`,
@@ -338,15 +340,27 @@ Each `Exchange` exposes `method`, `url`, `headers`, `body`, `statusCode`, `reaso
 
 Worth knowing:
 
-- **Credentials are masked** (`Password`, `ConnString`, `sPassword`) unless you choose
-  another mode — substitution happens as the exchange is recorded, so the buffer never holds
-  the real password. Request headers, the URL query, the URL's userinfo password and a JSON
-  request body are substituted by key; the error message, the response body and response
-  header values are scrubbed by value, because Guzzle embeds the request URI (including a
-  `sPassword` query parameter) in its exception messages and a server can echo a credential
-  back. Value scrubbing is literal, so a credential value that legitimately appears as data
-  elsewhere in a response is masked too. A masked curl needs the real value substituted
-  before it runs; an `Env` curl just needs the variables exported.
+- **Credentials are substituted as the exchange is recorded**, unless you choose
+  `CredentialMode::Real`. Two mechanisms, with different guarantees:
+  - **By key** — the `Password`, `ConnString` and `sPassword` entries in the request headers,
+    the URL query and a JSON request body, plus a userinfo password in the URL. This is exact.
+  - **By value** — the credential values the SDK knows about are then removed from the error
+    message, the response headers and the response body, together with their percent-encoded
+    and JSON-escaped forms. This is needed because Guzzle embeds the encoded request URI in
+    its exception messages and a server can echo a credential back.
+
+  What that does *not* guarantee: value scrubbing only covers credentials the SDK saw, so a
+  secret it never handled (a token inside your own payload, a credential the server invents)
+  is recorded as-is, and a credential carried only inside a request body larger than the
+  recording cap cannot be substituted by key. It is also literal and blind to context, so a
+  credential value that legitimately appears as data elsewhere gets masked too — and with a
+  very short credential value that collateral damage is severe (a one-character password
+  rewrites every occurrence of that character, which under `Env` mode can even mangle the
+  placeholders it just inserted). Treat a recording as a redacted debugging aid, not as a
+  sanitised artefact safe to publish unread.
+
+  A masked curl needs the real value substituted before it runs; an `Env` curl just needs the
+  variables exported.
 - **PSR-3 logging always masks**, whatever the recording mode is set to.
 - **`Content-Type: application/json` in curl output is inferred.** Guzzle adds it for JSON
   bodies; the SDK does not set it itself.

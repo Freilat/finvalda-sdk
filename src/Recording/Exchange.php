@@ -166,9 +166,17 @@ final class Exchange implements Stringable
      * Real credential values carried by this exchange, mapped to their
      * replacement text under the given mode. Collected from the request
      * headers, the URL query, and a JSON request body — the three places the
-     * SDK puts a credential. Longest values first, so replacing one that is a
-     * prefix of another cannot leave a fragment behind. Empty values are
-     * skipped so nothing ever replaces ''.
+     * SDK puts a credential.
+     *
+     * Each value is registered together with the encoded forms it can appear in
+     * downstream: Guzzle embeds the percent-encoded query string in its
+     * exception messages, and a JSON response body carries the JSON-escaped
+     * form. Without those, a password holding any character outside the
+     * unreserved set survives in `error` (recoverable with one `urldecode()`).
+     *
+     * Longest values first, so replacing one that is a prefix of another cannot
+     * leave a fragment behind. Empty values are skipped so nothing ever
+     * replaces ''.
      *
      * @return array<string, string>
      */
@@ -198,8 +206,14 @@ final class Exchange implements Stringable
             foreach ($sources as $source) {
                 $value = $source[$key] ?? null;
 
-                if (is_string($value) && $value !== '') {
-                    $secrets[$value] = $this->replacementFor($key, $mode);
+                if (! is_string($value) || $value === '') {
+                    continue;
+                }
+
+                $replacement = $this->replacementFor($key, $mode);
+
+                foreach ($this->encodedVariants($value) as $variant) {
+                    $secrets[$variant] = $replacement;
                 }
             }
         }
@@ -207,6 +221,32 @@ final class Exchange implements Stringable
         uksort($secrets, fn (string $a, string $b): int => strlen($b) <=> strlen($a));
 
         return $secrets;
+    }
+
+    /**
+     * A credential value plus every encoded form it can reach a recorded field
+     * in: percent-encoded (`rawurlencode` and `urlencode` differ for spaces —
+     * `%20` vs `+`) and JSON-escaped, both with PHP's default escaping and with
+     * slashes and unicode left alone, since the server chooses its own flags.
+     * Duplicates and empty results are dropped.
+     *
+     * @return list<string>
+     */
+    private function encodedVariants(string $value): array
+    {
+        $variants = [$value, rawurlencode($value), urlencode($value)];
+
+        foreach ([0, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE] as $flags) {
+            $encoded = json_encode($value, $flags);
+
+            // Strip the surrounding quotes json_encode adds; substr, not trim(),
+            // so a value whose escaped form ends in \" keeps its backslash.
+            if (is_string($encoded) && strlen($encoded) > 2) {
+                $variants[] = substr($encoded, 1, -1);
+            }
+        }
+
+        return array_values(array_unique(array_filter($variants, fn (string $v): bool => $v !== '')));
     }
 
     /**

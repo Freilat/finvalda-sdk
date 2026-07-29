@@ -124,8 +124,18 @@ response header values — are scrubbed **by value**: the real credential values
 from the still-unsubstituted exchange (headers, URL query, JSON body) and replaced with the
 mode's text. Guzzle embeds the request URI in `RequestException`/`ConnectException` messages,
 so without this the real `sPassword` would survive in `Exchange::$error`; the same pass also
-covers a server echoing a credential back. Longest values are replaced first so a value that
-is a prefix of another cannot leave a fragment behind, and empty values are skipped.
+covers a server echoing a credential back. Each value is registered together with the encoded
+forms it can arrive in — `rawurlencode()`, `urlencode()` (they differ for spaces), and the
+JSON-escaped form with and without PHP's default slash/unicode escaping — because Guzzle
+embeds the *encoded* query string, so scrubbing only the decoded value leaves any password
+with a character outside `A-Za-z0-9._~-` recoverable with a single `urldecode()`. Longest
+values are replaced first so a value that is a prefix of another cannot leave a fragment
+behind, and empty values are skipped.
+
+Value scrubbing is literal and context-blind: it cannot cover a credential the SDK never saw,
+and a very short credential value masks unrelated text (a one-character value under `Env` mode
+can even corrupt the placeholders already inserted). Accepted — the alternative is failing to
+redact a real secret.
 
 ## Public API
 
