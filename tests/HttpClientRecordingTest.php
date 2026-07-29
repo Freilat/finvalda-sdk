@@ -6,13 +6,16 @@ namespace Finvalda\Tests;
 
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\FinvaldaException;
+use Finvalda\Finvalda;
 use Finvalda\FinvaldaConfig;
 use Finvalda\HttpClient;
 use Finvalda\Retry\RetryPolicy;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 
@@ -33,6 +36,18 @@ class HttpClientRecordingTest extends TestCase
         );
 
         return new HttpClient($config, $guzzle);
+    }
+
+    /**
+     * References::user() is the SDK's only sPassword sender — it travels as a
+     * GET query parameter, so it is the case the recording redaction must cover.
+     */
+    private function lookUpUser(HttpClient $httpClient, string $userName, string $password): void
+    {
+        (new Finvalda(
+            new FinvaldaConfig(baseUrl: 'https://example.com/FvsServicePure.svc', username: 'demo', password: 'x'),
+            $httpClient,
+        ))->references()->user($userName, $password);
     }
 
     public function test_recording_is_off_by_default(): void
@@ -342,6 +357,183 @@ class HttpClientRecordingTest extends TestCase
         $httpClient->get('GetPrekes');
 
         $this->assertSame('$FVS_PASSWORD', $httpClient->lastRecording()?->headers['Password']);
+    }
+
+    /**
+     * Guzzle's cURL handler builds the ConnectException message as
+     * "cURL error N: ... for {uri}", so a real sPassword query value lands in
+     * Exchange::$error verbatim unless it is scrubbed.
+     */
+    public function test_a_transport_failure_does_not_leak_the_credential_in_masked_mode(): void
+    {
+        $uri = 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123';
+
+        $httpClient = $this->createHttpClient([
+            new ConnectException(
+                "cURL error 6: Could not resolve host: example.com (see https://curl.se/libcurl/c/libcurl-errors.html) for {$uri}",
+                new Request('GET', $uri),
+            ),
+        ]);
+
+        $httpClient->record();
+
+        try {
+            $this->lookUpUser($httpClient, 'bob', 'topsecret123');
+            $this->fail('Expected a FinvaldaException');
+        } catch (FinvaldaException) {
+            // expected
+        }
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertStringNotContainsString('topsecret123', (string) $exchange);
+        $this->assertStringNotContainsString('topsecret123', $exchange->toCurl());
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($exchange->toArray()));
+        $this->assertStringNotContainsString('secret-password', (string) json_encode($exchange->toArray()));
+        // The message is still useful
+        $this->assertStringContainsString('Could not resolve host', (string) $exchange->error);
+        $this->assertStringContainsString('sPassword=***', (string) $exchange->error);
+    }
+
+    public function test_a_transport_failure_does_not_leak_the_credential_in_env_mode(): void
+    {
+        $uri = 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123';
+
+        $httpClient = $this->createHttpClient([
+            new ConnectException("cURL error 7: Failed to connect for {$uri}", new Request('GET', $uri)),
+        ]);
+
+        $httpClient->record(credentials: CredentialMode::Env);
+
+        try {
+            $this->lookUpUser($httpClient, 'bob', 'topsecret123');
+            $this->fail('Expected a FinvaldaException');
+        } catch (FinvaldaException) {
+            // expected
+        }
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($exchange->toArray()));
+        $this->assertStringNotContainsString('secret-password', (string) json_encode($exchange->toArray()));
+        $this->assertStringContainsString('sPassword=$FVS_SPASSWORD', (string) $exchange->error);
+    }
+
+    public function test_a_response_echoing_the_credential_does_not_leak_it(): void
+    {
+        $httpClient = $this->createHttpClient([
+            new Response(
+                200,
+                ['X-Echo' => 'pw=topsecret123'],
+                json_encode(['AccessResult' => 'Success', 'sPassword' => 'topsecret123']),
+            ),
+        ]);
+
+        $httpClient->record();
+        $this->lookUpUser($httpClient, 'bob', 'topsecret123');
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertSame(['X-Echo' => ['pw=***']], $exchange->responseHeaders);
+        $this->assertStringNotContainsString('topsecret123', (string) $exchange);
+        $this->assertStringNotContainsString('topsecret123', $exchange->toCurl());
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($exchange->toArray()));
+    }
+
+    public function test_a_recorded_url_query_credential_stays_literal_and_keeps_rfc3986_encoding(): void
+    {
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ]);
+
+        $httpClient->record();
+        $httpClient->get('GetFvsUser', ['sUserName' => 'John Doe', 'sPassword' => 'topsecret123']);
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertSame(
+            'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=John%20Doe&sPassword=***',
+            $exchange->url,
+        );
+
+        $httpClient->record(credentials: CredentialMode::Env);
+        $httpClient->get('GetFvsUser', ['sUserName' => 'John Doe', 'sPassword' => 'topsecret123']);
+
+        $curl = $httpClient->lastRecording()?->toCurl() ?? '';
+
+        $this->assertStringNotContainsString('%24FVS_SPASSWORD', $curl);
+        $this->assertStringContainsString('sPassword=\'"$FVS_SPASSWORD"', $curl);
+    }
+
+    public function test_recorded_bodies_are_capped_by_size(): void
+    {
+        $big = json_encode(['AccessResult' => 'Success', 'blob' => str_repeat('x', 150_000)]);
+        $small = json_encode(['AccessResult' => 'Success', 'blob' => str_repeat('y', 1_000)]);
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], $big),
+            new Response(200, [], $small),
+        ]);
+
+        $httpClient->record();
+        $httpClient->get('GetBig');
+        $httpClient->get('GetSmall');
+
+        $recordings = $httpClient->recordings();
+
+        $this->assertLessThan(strlen((string) $big), strlen((string) $recordings[0]->responseBody));
+        $this->assertStringContainsString('... [truncated ', (string) $recordings[0]->responseBody);
+        $this->assertSame($small, $recordings[1]->responseBody);
+    }
+
+    public function test_a_recorded_request_body_is_capped_by_size(): void
+    {
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success', 'nResult' => 0])),
+        ]);
+
+        $httpClient->record();
+        $httpClient->postOperation('InsertNewOperation', ['ItemClassName' => 'PardDok'], str_repeat('z', 150_000));
+
+        $body = (string) $httpClient->lastRecording()?->body;
+
+        $this->assertLessThan(150_000, strlen($body));
+        $this->assertStringContainsString('... [truncated ', $body);
+    }
+
+    public function test_env_placeholders_reach_headers_and_the_url_query_from_a_config_array(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com/FvsServicePure.svc',
+            'username' => 'demo',
+            'password' => 'secret-password',
+            'record' => true,
+            'record_limit' => 5,
+            'record_credentials' => 'env',
+        ]);
+
+        $httpClient = $this->createHttpClient([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ], $config);
+
+        $this->lookUpUser($httpClient, 'bob', 'topsecret123');
+
+        $exchange = $httpClient->lastRecording();
+
+        $this->assertNotNull($exchange);
+        $this->assertSame('$FVS_PASSWORD', $exchange->headers['Password']);
+        $this->assertSame(
+            'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=$FVS_SPASSWORD',
+            $exchange->url,
+        );
+        $this->assertStringNotContainsString('secret-password', $exchange->toCurl());
+        $this->assertStringNotContainsString('topsecret123', $exchange->toCurl());
+        $this->assertStringContainsString('sPassword=\'"$FVS_SPASSWORD"', $exchange->toCurl());
     }
 
     public function test_config_can_request_credential_capture(): void

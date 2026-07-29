@@ -108,8 +108,24 @@ env placeholders apply to recordings only, never to PSR-3 logs.
 `Redactor` exposes `apply()` (mask) and `applyPlaceholders()` (env placeholders), with a
 per-key placeholder map: `Password` → `$FVS_PASSWORD`, `ConnString` → `$FVS_CONN_STRING`,
 `sPassword` → `$FVS_SPASSWORD`. `sPassword` gets its own placeholder because it is a
-different secret — the target user's new password in `References::updateUserPassword()` —
-which also travels as a GET query parameter, so URL queries are substituted too.
+different secret — the looked-up user's password in `References::user()` (`GetFvsUser`),
+the SDK's only `sPassword` sender — which travels as a GET query parameter, so URL queries
+are substituted too.
+
+Because a substituted query value must stay readable (`***`) and shell-expandable
+(`$FVS_SPASSWORD`), the query is rebuilt pair by pair rather than through a bare
+`http_build_query()`: substituted values are emitted literally and every other parameter is
+re-encoded with `PHP_QUERY_RFC3986`, matching `HttpClient::recordedUrl()` and Guzzle. A
+non-empty userinfo password (`https://user:pass@host/...`, which Guzzle honours as Basic
+auth) is substituted in place as well.
+
+Fields that are not key/value structured — the `error` message, the response body, and
+response header values — are scrubbed **by value**: the real credential values are collected
+from the still-unsubstituted exchange (headers, URL query, JSON body) and replaced with the
+mode's text. Guzzle embeds the request URI in `RequestException`/`ConnectException` messages,
+so without this the real `sPassword` would survive in `Exchange::$error`; the same pass also
+covers a server echoing a credential back. Longest values are replaced first so a value that
+is a prefix of another cannot leave a fragment behind, and empty values are skipped.
 
 ## Public API
 
@@ -237,8 +253,12 @@ double-quoted, then concatenated. This also keeps a JSON body correct
   on a connection error, `error` holds the message. The exception then rethrows unchanged,
   so error handling is unaffected.
 - Duration is measured around the Guzzle call.
-- Bodies are stored whole — no 100 KB truncation as in the PSR-3 path. The buffer is short
-  and explicitly opted into.
+- Request and response bodies are capped at the same 100 KB budget the PSR-3 path uses,
+  through the shared `Finvalda\Support\BodyTruncator`. Bounding only the exchange count is
+  not enough: the Laravel binding is a singleton, so a queue worker with `FINVALDA_RECORD=true`
+  would retain `record_limit` whole bodies for its lifetime, and `Reports` endpoints answer
+  with PDFs. Headers and the URL are never truncated. A truncated body makes `toCurl()`
+  non-reproducible for that exchange.
 - Recording is off unless enabled; the hot path costs one null check.
 
 ## Testing

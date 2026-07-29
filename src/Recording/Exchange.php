@@ -127,6 +127,14 @@ final class Exchange implements Stringable
      * A copy whose headers, URL query, and JSON body carry credential values
      * substituted per the given mode. The URL and body are returned unchanged
      * when they carry no credentials.
+     *
+     * Fields that are not structured — the transport/HTTP error message, the
+     * response body, and response header values — are scrubbed by value: the
+     * real credential values are collected from this (still unsubstituted)
+     * object and replaced with the same text the mode uses. Guzzle embeds the
+     * request URI in its exception messages, so `error` would otherwise carry a
+     * verbatim `sPassword` query value; a server echoing a credential back
+     * would leak it the same way.
      */
     public function withCredentials(CredentialMode $mode): self
     {
@@ -137,18 +145,99 @@ final class Exchange implements Stringable
         /** @var array<string, string> $headers */
         $headers = $this->substitute($this->headers, $mode);
 
+        $secrets = $this->credentialValues($mode);
+
         return new self(
             method: $this->method,
             url: $this->substituteUrl($this->url, $mode),
             headers: $headers,
-            body: $this->substituteBody($this->body, $mode),
+            body: $this->scrub($this->substituteBody($this->body, $mode), $secrets),
             statusCode: $this->statusCode,
             reasonPhrase: $this->reasonPhrase,
-            responseHeaders: $this->responseHeaders,
-            responseBody: $this->responseBody,
+            responseHeaders: $this->scrubHeaders($this->responseHeaders, $secrets),
+            responseBody: $this->scrub($this->responseBody, $secrets),
             durationMs: $this->durationMs,
-            error: $this->error,
+            error: $this->scrub($this->error, $secrets),
             attempt: $this->attempt,
+        );
+    }
+
+    /**
+     * Real credential values carried by this exchange, mapped to their
+     * replacement text under the given mode. Collected from the request
+     * headers, the URL query, and a JSON request body — the three places the
+     * SDK puts a credential. Longest values first, so replacing one that is a
+     * prefix of another cannot leave a fragment behind. Empty values are
+     * skipped so nothing ever replaces ''.
+     *
+     * @return array<string, string>
+     */
+    private function credentialValues(CredentialMode $mode): array
+    {
+        $sources = [$this->headers];
+
+        $query = parse_url($this->url, PHP_URL_QUERY);
+
+        if (is_string($query) && $query !== '') {
+            $params = [];
+            parse_str($query, $params);
+            $sources[] = $params;
+        }
+
+        if ($this->body !== null) {
+            $decoded = json_decode($this->body, true);
+
+            if (is_array($decoded)) {
+                $sources[] = $decoded;
+            }
+        }
+
+        $secrets = [];
+
+        foreach (Redactor::KEYS as $key) {
+            foreach ($sources as $source) {
+                $value = $source[$key] ?? null;
+
+                if (is_string($value) && $value !== '') {
+                    $secrets[$value] = $this->replacementFor($key, $mode);
+                }
+            }
+        }
+
+        uksort($secrets, fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+
+        return $secrets;
+    }
+
+    /**
+     * @param  array<string, string>  $secrets
+     */
+    private function scrub(?string $value, array $secrets): ?string
+    {
+        if ($value === null || $secrets === []) {
+            return $value;
+        }
+
+        return str_replace(array_keys($secrets), array_values($secrets), $value);
+    }
+
+    /**
+     * @param  array<string, list<string>>  $headers
+     * @param  array<string, string>  $secrets
+     * @return array<string, list<string>>
+     */
+    private function scrubHeaders(array $headers, array $secrets): array
+    {
+        if ($secrets === []) {
+            return $headers;
+        }
+
+        return array_map(
+            fn (array $values): array => array_map(
+                fn (string $value): string => (string) $this->scrub($value, $secrets),
+                $values,
+            ),
+            $headers,
         );
     }
 
@@ -165,6 +254,53 @@ final class Exchange implements Stringable
 
     private function substituteUrl(string $url, CredentialMode $mode): string
     {
+        return $this->substituteQuery($this->substituteUserInfo($url, $mode), $mode);
+    }
+
+    /**
+     * Substitute a userinfo password (`https://user:pass@host/...`, which Guzzle
+     * honours as Basic auth) in place, leaving the rest of the URL untouched.
+     */
+    private function substituteUserInfo(string $url, CredentialMode $mode): string
+    {
+        $password = parse_url($url, PHP_URL_PASS);
+
+        if (! is_string($password) || $password === '') {
+            return $url;
+        }
+
+        $schemeEnd = strpos($url, '://');
+        $authorityStart = $schemeEnd === false ? 0 : $schemeEnd + 3;
+        $authorityLength = strcspn($url, '/?#', $authorityStart);
+        $authority = substr($url, $authorityStart, $authorityLength);
+
+        $at = strrpos($authority, '@');
+
+        if ($at === false) {
+            return $url;
+        }
+
+        $colon = strpos(substr($authority, 0, $at), ':');
+
+        if ($colon === false) {
+            return $url;
+        }
+
+        $start = $authorityStart + $colon + 1;
+
+        return substr_replace($url, $this->replacementFor('Password', $mode), $start, $at - $colon - 1);
+    }
+
+    /**
+     * Substitute credential values in the query string, rebuilt so a
+     * substituted value stays literal: `***` remains readable and
+     * `$FVS_SPASSWORD` remains shell-expandable, neither becoming
+     * `%2A%2A%2A` / `%24FVS_SPASSWORD`. Non-credential parameters are
+     * re-encoded exactly as HttpClient::recordedUrl() encodes them
+     * (RFC 3986, matching Guzzle), so they stay byte-identical to the wire.
+     */
+    private function substituteQuery(string $url, CredentialMode $mode): string
+    {
         $query = parse_url($url, PHP_URL_QUERY);
 
         if (! is_string($query) || $query === '') {
@@ -179,13 +315,42 @@ final class Exchange implements Stringable
             return $url;
         }
 
-        $offset = strpos($url, '?');
+        $offset = (int) strpos($url, '?');
 
-        if ($offset === false) {
-            return $url;
+        return substr_replace($url, $this->buildQuery($substituted), $offset + 1, strlen($query));
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     */
+    private function buildQuery(array $params): string
+    {
+        $pairs = [];
+
+        foreach ($params as $key => $value) {
+            if (is_string($value) && in_array((string) $key, Redactor::KEYS, true)) {
+                // Already substituted: emit the mask/placeholder verbatim.
+                $pairs[] = rawurlencode((string) $key) . '=' . $value;
+
+                continue;
+            }
+
+            // Handles scalars, arrays, and empty values exactly as Guzzle would.
+            $pair = http_build_query([$key => $value], '', '&', PHP_QUERY_RFC3986);
+
+            if ($pair !== '') {
+                $pairs[] = $pair;
+            }
         }
 
-        return substr_replace($url, http_build_query($substituted), $offset + 1, strlen($query));
+        return implode('&', $pairs);
+    }
+
+    private function replacementFor(string $key, CredentialMode $mode): string
+    {
+        return $mode === CredentialMode::Env
+            ? Redactor::PLACEHOLDERS[$key]
+            : Redactor::MASK;
     }
 
     private function substituteBody(?string $body, CredentialMode $mode): ?string

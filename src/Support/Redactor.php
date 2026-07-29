@@ -20,7 +20,8 @@ final class Redactor
     /**
      * Shell variable placeholders, one per credential key. sPassword gets its
      * own name because it is a different secret from the connection password —
-     * it is the target user's new password in References::updateUserPassword().
+     * it is the looked-up user's password in References::user() (GetFvsUser),
+     * which travels as a GET query parameter.
      */
     public const PLACEHOLDERS = [
         'Password' => '$FVS_PASSWORD',

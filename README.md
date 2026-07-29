@@ -340,8 +340,13 @@ Worth knowing:
 
 - **Credentials are masked** (`Password`, `ConnString`, `sPassword`) unless you choose
   another mode — substitution happens as the exchange is recorded, so the buffer never holds
-  the real password. A masked curl needs the real value substituted before it runs; an `Env`
-  curl just needs the variables exported.
+  the real password. Request headers, the URL query, the URL's userinfo password and a JSON
+  request body are substituted by key; the error message, the response body and response
+  header values are scrubbed by value, because Guzzle embeds the request URI (including a
+  `sPassword` query parameter) in its exception messages and a server can echo a credential
+  back. Value scrubbing is literal, so a credential value that legitimately appears as data
+  elsewhere in a response is masked too. A masked curl needs the real value substituted
+  before it runs; an `Env` curl just needs the variables exported.
 - **PSR-3 logging always masks**, whatever the recording mode is set to.
 - **`Content-Type: application/json` in curl output is inferred.** Guzzle adds it for JSON
   bodies; the SDK does not set it itself.
@@ -352,8 +357,14 @@ Worth knowing:
 - **Failures are recorded, then rethrown.** A 4xx/5xx exchange carries the status and error
   body; a connection failure carries `error` with no status.
 - **Retries record one exchange per attempt**, each with its own `attempt` number and duration.
-- Bodies are stored whole — unlike PSR-3 logging, there is no 100 KB truncation. Keep
-  `limit` modest in long-running processes.
+- **Bodies are capped at 100 KB each**, the same budget PSR-3 logging uses, with the excess
+  replaced by a `... [truncated N bytes]` marker. Without the cap a long-lived process (the
+  Laravel binding is a singleton, so a queue worker keeps one buffer for its lifetime) would
+  retain `limit` whole bodies — and `Reports` endpoints answer with PDFs. A truncated body
+  makes `toCurl()` non-reproducible for that exchange: the `-d` payload is no longer the
+  bytes that were sent. Keep `limit` modest in long-running processes.
+- **`FINVALDA_RECORD_LIMIT=0` records one exchange, not none** — the limit is clamped to a
+  minimum of 1. Set `FINVALDA_RECORD=false` (or call `stopRecording()`) to disable recording.
 
 ### Retry Policy
 

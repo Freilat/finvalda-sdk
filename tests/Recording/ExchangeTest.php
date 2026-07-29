@@ -331,7 +331,8 @@ class ExchangeTest extends TestCase
         $url = $exchange->withCredentials(CredentialMode::Masked)->url;
 
         $this->assertStringNotContainsString('secret', $url);
-        $this->assertStringContainsString('sPassword=%2A%2A%2A', $url);
+        // The mask stays literal — percent-encoding it would make it unreadable
+        $this->assertStringContainsString('sPassword=***', $url);
         $this->assertStringContainsString('sKodas=ADMIN', $url);
     }
 
@@ -352,8 +353,224 @@ class ExchangeTest extends TestCase
         $url = $exchange->withCredentials(CredentialMode::Env)->url;
 
         $this->assertStringNotContainsString('secret', $url);
-        // http_build_query percent-encodes the placeholder; decode before asserting
-        $this->assertStringContainsString('sPassword=' . urlencode('$FVS_SPASSWORD'), $url);
+        // The placeholder stays literal, so toCurl() can quote it for the shell
+        $this->assertStringContainsString('sPassword=$FVS_SPASSWORD', $url);
+    }
+
+    public function test_env_mode_url_placeholder_is_shell_expandable_in_curl(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123',
+            headers: ['UserName' => 'demo', 'Password' => 'conn-pass'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $curl = $exchange->withCredentials(CredentialMode::Env)->toCurl();
+
+        $this->assertStringNotContainsString('topsecret123', $curl);
+        // Literal chunk single-quoted, placeholder double-quoted so a shell expands it
+        $this->assertStringContainsString(
+            "'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword='\"\$FVS_SPASSWORD\"",
+            $curl,
+        );
+        $this->assertStringNotContainsString('%24FVS_SPASSWORD', $curl);
+    }
+
+    public function test_query_substitution_keeps_rfc3986_encoding_of_other_parameters(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sPavadinimas=John%20Doe&sPassword=secret',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Masked)->url;
+
+        // RFC 3986, as HttpClient::recordedUrl() and Guzzle both encode it — not RFC 1738's '+'
+        $this->assertStringContainsString('sPavadinimas=John%20Doe', $url);
+        $this->assertStringNotContainsString('John+Doe', $url);
+        $this->assertStringContainsString('sPassword=***', $url);
+    }
+
+    public function test_query_substitution_survives_array_and_empty_parameters(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sKodai%5B0%5D=A&sKodai%5B1%5D=B&sTuscias=&sPassword=secret',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Masked)->url;
+
+        $this->assertStringContainsString('sKodai%5B0%5D=A', $url);
+        $this->assertStringContainsString('sKodai%5B1%5D=B', $url);
+        $this->assertStringContainsString('sTuscias=', $url);
+        $this->assertStringContainsString('sPassword=***', $url);
+    }
+
+    public function test_substitutes_a_userinfo_password_in_the_url(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://svcuser:svcpass@example.com/FvsServicePure.svc/GetPrekes?sKodas=A',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+        $env = $exchange->withCredentials(CredentialMode::Env);
+
+        $this->assertSame(
+            'https://svcuser:***@example.com/FvsServicePure.svc/GetPrekes?sKodas=A',
+            $masked->url,
+        );
+        $this->assertSame(
+            'https://svcuser:$FVS_PASSWORD@example.com/FvsServicePure.svc/GetPrekes?sKodas=A',
+            $env->url,
+        );
+        // A userinfo without a password component is left alone
+        $this->assertStringNotContainsString('svcpass', $masked->url);
+    }
+
+    public function test_leaves_a_userinfo_without_a_password_untouched(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://svcuser@example.com/FvsServicePure.svc/GetPrekes',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $this->assertSame($exchange->url, $exchange->withCredentials(CredentialMode::Masked)->url);
+    }
+
+    public function test_scrubs_the_credential_out_of_a_transport_error_message(): void
+    {
+        // Guzzle embeds the request URI in ConnectException/RequestException messages
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123',
+            headers: ['UserName' => 'demo', 'Password' => 'conn-pass-9'],
+            body: null,
+            statusCode: null,
+            reasonPhrase: null,
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 30.0,
+            error: 'cURL error 6: Could not resolve host: example.com for '
+                . 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123',
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        $this->assertStringNotContainsString('topsecret123', (string) $masked->error);
+        $this->assertStringContainsString('sPassword=***', (string) $masked->error);
+        $this->assertStringContainsString('Could not resolve host', (string) $masked->error);
+        $this->assertStringNotContainsString('topsecret123', (string) $masked);
+        $this->assertStringNotContainsString('topsecret123', $masked->toCurl());
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($masked->toArray()));
+
+        $env = $exchange->withCredentials(CredentialMode::Env);
+
+        $this->assertStringContainsString('sPassword=$FVS_SPASSWORD', (string) $env->error);
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($env->toArray()));
+        $this->assertStringNotContainsString('conn-pass-9', (string) json_encode($env->toArray()));
+    }
+
+    public function test_scrubs_a_credential_echoed_back_in_the_response(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sUserName=bob&sPassword=topsecret123',
+            headers: ['Password' => 'conn-pass-9'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: ['X-Echo' => ['pw=topsecret123']],
+            responseBody: '{"AccessResult":"Success","sPassword":"topsecret123","sConn":"conn-pass-9"}',
+            durationMs: 1.0,
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        $this->assertSame(['X-Echo' => ['pw=***']], $masked->responseHeaders);
+        $this->assertStringNotContainsString('topsecret123', (string) $masked->responseBody);
+        $this->assertStringNotContainsString('conn-pass-9', (string) $masked->responseBody);
+        $this->assertStringNotContainsString('topsecret123', (string) $masked);
+        $this->assertStringNotContainsString('topsecret123', (string) json_encode($masked->toArray()));
+
+        $env = $exchange->withCredentials(CredentialMode::Env);
+
+        $this->assertStringContainsString('"sPassword":"$FVS_SPASSWORD"', (string) $env->responseBody);
+        $this->assertStringContainsString('"sConn":"$FVS_PASSWORD"', (string) $env->responseBody);
+    }
+
+    public function test_scrub_skips_empty_credential_values(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sPassword=',
+            headers: ['Password' => ''],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: 'plain body',
+            durationMs: 1.0,
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        // An empty credential must not turn every byte boundary into a mask
+        $this->assertSame('plain body', $masked->responseBody);
+    }
+
+    public function test_scrub_replaces_the_longest_credential_first(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetFvsUser?sPassword=secret123',
+            headers: ['Password' => 'secret'],
+            body: null,
+            statusCode: 500,
+            reasonPhrase: 'Internal Server Error',
+            responseHeaders: [],
+            responseBody: 'saw secret123 and secret',
+            durationMs: 1.0,
+        );
+
+        $masked = $exchange->withCredentials(CredentialMode::Masked);
+
+        // 'secret' is a prefix of 'secret123'; the longer value must go first
+        $this->assertSame('saw *** and ***', $masked->responseBody);
     }
 
     public function test_masked_mode_masks_credentials_in_a_json_body(): void
@@ -394,7 +611,7 @@ class ExchangeTest extends TestCase
 
         // The path occurrence is untouched; only the real query is substituted.
         $this->assertStringContainsString('/sKodas=ADMIN&sPassword=secret/api?', $url);
-        $this->assertStringContainsString('sPassword=%2A%2A%2A', $url);
+        $this->assertStringContainsString('sPassword=***', $url);
         $this->assertStringNotContainsString('sPassword=secret', substr($url, (int) strpos($url, '?')));
     }
 

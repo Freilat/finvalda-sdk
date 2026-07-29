@@ -15,6 +15,7 @@ use Finvalda\Recording\Recorder;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
+use Finvalda\Support\BodyTruncator;
 use Finvalda\Support\OutboundNumericNormalizer;
 use Finvalda\Support\Redactor;
 use GuzzleHttp\Client;
@@ -32,7 +33,16 @@ final class HttpClient
      * Maximum number of bytes of a request/response body included in
      * PSR-3 log records. Larger bodies are truncated with a marker.
      */
-    private const MAX_LOGGED_BODY_BYTES = 100_000;
+    private const MAX_LOGGED_BODY_BYTES = BodyTruncator::MAX_BYTES;
+
+    /**
+     * Maximum number of bytes of a request/response body kept in a recorded
+     * Exchange. Recording is bounded by exchange count as well, but a `Reports`
+     * endpoint answers with a PDF, and the Laravel binding is a singleton — so
+     * without a per-body cap a long-lived worker would retain `record_limit`
+     * whole bodies for its lifetime.
+     */
+    private const MAX_RECORDED_BODY_BYTES = BodyTruncator::MAX_BYTES;
 
     private ClientInterface $client;
 
@@ -312,11 +322,11 @@ final class HttpClient
                 method: $method,
                 url: $this->recordedUrl($endpoint, $options),
                 headers: $this->recordedHeaders($options),
-                body: $this->recordedBody($options),
+                body: $this->truncateForRecording($this->recordedBody($options)),
                 statusCode: $response->getStatusCode(),
                 reasonPhrase: $response->getReasonPhrase(),
                 responseHeaders: $response->getHeaders(),
-                responseBody: $body,
+                responseBody: $this->truncateForRecording($body),
                 durationMs: $duration * 1000,
                 attempt: $attempt,
             ));
@@ -355,11 +365,13 @@ final class HttpClient
             method: $method,
             url: $this->recordedUrl($endpoint, $options),
             headers: $this->recordedHeaders($options),
-            body: $this->recordedBody($options),
+            body: $this->truncateForRecording($this->recordedBody($options)),
             statusCode: $response?->getStatusCode(),
             reasonPhrase: $response?->getReasonPhrase(),
             responseHeaders: $response?->getHeaders() ?? [],
-            responseBody: $response !== null ? (string) $response->getBody() : null,
+            responseBody: $response !== null
+                ? $this->truncateForRecording((string) $response->getBody())
+                : null,
             durationMs: $duration * 1000,
             error: $e->getMessage(),
             attempt: $attempt,
@@ -456,13 +468,12 @@ final class HttpClient
 
     private function truncateForLog(?string $body): ?string
     {
-        if ($body === null || strlen($body) <= self::MAX_LOGGED_BODY_BYTES) {
-            return $body;
-        }
+        return BodyTruncator::truncate($body, self::MAX_LOGGED_BODY_BYTES);
+    }
 
-        $omitted = strlen($body) - self::MAX_LOGGED_BODY_BYTES;
-
-        return substr($body, 0, self::MAX_LOGGED_BODY_BYTES) . "... [truncated {$omitted} bytes]";
+    private function truncateForRecording(?string $body): ?string
+    {
+        return BodyTruncator::truncate($body, self::MAX_RECORDED_BODY_BYTES);
     }
 
     /**
