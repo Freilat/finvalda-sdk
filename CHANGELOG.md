@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-07-29
+
+### Added — request/response recording, readable or as a curl command
+
+Debug mode kept only the last exchange, as plain arrays, and captured nothing at
+all when a request failed — precisely when you want it. Recording is a third
+surface alongside PSR-3 logging and debug mode: a bounded in-memory history of
+exchanges as value objects that render themselves.
+
+- **`$finvalda->record()`** starts a ring buffer (default 20 exchanges), read back
+  with `recordings()` (oldest first) and `lastRecording()`; `stopRecording()` stops
+  and drops it. Also enabled per environment without touching code via
+  `FinvaldaConfig` (`record`, `recordLimit`, `recordCredentials`) and the Laravel
+  keys `record` / `record_limit` / `record_credentials`
+  (`FINVALDA_RECORD`, `FINVALDA_RECORD_LIMIT`, `FINVALDA_RECORD_CREDENTIALS`).
+- **`Recording\Exchange`** carries one request *attempt* and its outcome — `method`,
+  `url`, `headers`, `body`, `statusCode`, `reasonPhrase`, `responseHeaders`,
+  `responseBody`, `durationMs`, `error`, `attempt` — and renders itself three ways:
+  `__toString()`/`toString()` as readable HTTP text with pretty JSON and the
+  operation payload carried in `xmlstring` decoded and nested rather than shown as an
+  escaped one-liner; `toCurl()` as a reproducible command; `toArray()` for structured
+  consumption.
+- **Failures and retries are recorded.** Capture sits inside the per-attempt closure
+  in `sendRequest()`, so a retried call yields one `Exchange` per attempt with its own
+  duration and 1-based `attempt`. A 4xx/5xx exchange carries the status, headers and
+  error body; a transport failure carries `error` with no status. The original
+  exception is rethrown unchanged.
+- **`Enums\CredentialMode`** controls how `Password`, `ConnString` and `sPassword`
+  appear: `Masked` (default, `***`), `Env` (shell placeholders `$FVS_PASSWORD`,
+  `$FVS_CONN_STRING`, `$FVS_SPASSWORD` — the curl runs after exporting them and the
+  secret is never printed), `Real` (verbatim; never in production). Substitution
+  happens as the exchange is recorded, so the buffer does not hold real credentials
+  under the first two modes. `toCurl()`'s quoting is placeholder-aware — literal
+  chunks single-quoted, placeholders double-quoted — so a placeholder expands even
+  inside a JSON body: `-d '{"sPassword":"'"$FVS_SPASSWORD"'"}'`.
+- `HttpClient::REDACTED_KEYS` and its private `redact()` moved to
+  **`Support\Redactor`** so PSR-3 log redaction and recording substitution cannot
+  drift. PSR-3 logging always masks, whatever the recording mode.
+
+**What the recording is, precisely.** The recorded URL reproduces Guzzle's own
+resolution and RFC 3986 query encoding, and the body is encoded exactly as Guzzle
+encodes the `json` option — but it is the SDK's view of the request, not literal wire
+bytes: anything an externally injected Guzzle client adds (default headers,
+middleware) does not appear. `Content-Type: application/json` in curl output is
+inferred, since Guzzle sets it and `buildHeaders()` does not.
+
+**Two honest limits.** Credential *keys* are substituted exactly in headers, URL
+query, JSON body and userinfo; the `error` string, response headers and response body
+are unstructured, so known credential *values* (plus their percent-encoded and
+JSON-escaped forms) are scrubbed from them by value. Guzzle embeds the request URI in
+its exception messages, so without that pass a real `sPassword` would survive in
+`Exchange::$error` even under `Masked`. Value scrubbing is literal: a credential value
+that legitimately appears as unrelated data is replaced too, and a one- or
+two-character credential will mangle surrounding text. Treat a recording as a redacted
+debugging aid, not a sanitised artefact safe to publish unread. Bodies are capped at
+100 KB per exchange (a Laravel singleton with `FINVALDA_RECORD=true` in a long-lived
+worker would otherwise retain full bodies for the worker's lifetime); a truncated body
+is marked and makes that exchange's curl non-reproducible.
+
+`setDebug()` / `getLastDebugInfo()` and PSR-3 logging are unchanged.
+
 ## [3.4.0] - 2026-07-28
 
 ### Added — additional purchase costs, purchase corrections, stock-op lookup
