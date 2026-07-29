@@ -13,6 +13,7 @@ Built from the official [Finvalda API documentation](https://documenter.getpostm
   - [Basic Configuration](#basic-configuration)
   - [Laravel Integration](#laravel-integration)
   - [Logging](#logging)
+  - [Recording Requests](#recording-requests)
   - [Retry Policy](#retry-policy)
   - [Custom HTTP Client](#custom-http-client-testing)
 - [Typed DTOs & Collections](#typed-dtos--collections)
@@ -119,6 +120,7 @@ if ($result->success) {
 use Finvalda\Finvalda;
 use Finvalda\FinvaldaConfig;
 use Finvalda\Enums\Language;
+use Finvalda\Enums\CredentialMode;
 use Finvalda\Retry\RetryPolicy;
 
 $config = new FinvaldaConfig(
@@ -135,6 +137,9 @@ $config = new FinvaldaConfig(
     timeout: 30,
     logger: null,                        // PSR-3 logger instance
     retry: null,                         // RetryPolicy instance
+    record: false,                              // Keep the last N exchanges in memory
+    recordLimit: 20,
+    recordCredentials: CredentialMode::Masked,  // or Env (placeholders) / Real
 );
 
 $finvalda = new Finvalda($config);
@@ -156,6 +161,11 @@ FINVALDA_LOG_CHANNEL=stack
 # Optional: retry transient failures with exponential backoff
 FINVALDA_RETRY_ENABLED=true
 FINVALDA_RETRY_MAX_ATTEMPTS=3
+
+# Optional: keep the last N request/response exchanges in memory
+FINVALDA_RECORD=true
+FINVALDA_RECORD_LIMIT=20
+FINVALDA_RECORD_CREDENTIALS=masked  # masked | env | real
 ```
 
 Publish the config file (optional):
@@ -221,6 +231,129 @@ print_r($debug['response']);  // status_code, headers, body
 // Disable debug mode (clears stored info)
 $finvalda->setDebug(false);
 ```
+
+### Recording Requests
+
+Debug mode holds only the last exchange, as arrays, and captures nothing when a request
+fails. Recording keeps a short history of exchanges as objects that render themselves —
+including failed attempts and each retry.
+
+```php
+use Finvalda\Enums\CredentialMode;
+
+$finvalda->record();                                    // last 20 exchanges, credentials masked
+$finvalda->record(limit: 5);
+$finvalda->record(credentials: CredentialMode::Env);    // $FVS_PASSWORD placeholders
+$finvalda->record(credentials: CredentialMode::Real);   // real credentials
+
+$finvalda->sale()->client('C001')->save('PARD');
+
+echo $finvalda->lastRecording();                        // formatted HTTP text
+echo $finvalda->lastRecording()->toCurl();              // curl command
+
+foreach ($finvalda->recordings() as $exchange) {
+    echo $exchange->toCurl(), PHP_EOL;
+}
+
+$finvalda->stopRecording();                             // stops and drops the buffer
+```
+
+Credential modes:
+
+| Mode | Output | Use it when |
+|---|---|---|
+| `CredentialMode::Masked` (default) | `Password: ***` | Reading recordings, pasting them into an issue |
+| `CredentialMode::Env` | `Password: $FVS_PASSWORD` | You want a runnable curl without printing the secret — export the variables first |
+| `CredentialMode::Real` | `Password: s3cret` | Local debugging only, never in production |
+
+In Laravel, enable it per environment without touching code:
+
+```env
+FINVALDA_RECORD=true
+FINVALDA_RECORD_LIMIT=20
+FINVALDA_RECORD_CREDENTIALS=masked  # masked | env | real
+```
+
+The formatted rendering pretty-prints JSON and expands the payload the API carries in
+`xmlstring`, so a write operation is readable at a glance:
+
+```
+POST https://your-server.com/FvsServicePure.svc/InsertNewOperation
+UserName: demo
+Password: ***
+Accept: application/json
+Language: 0
+
+{
+    "ItemClassName": "PardDok",
+    "sParametras": "PARD",
+    "xmlstring": {
+        "PardDok": {
+            "sKlientas": "C001"
+        }
+    }
+}
+
+--- 200 OK (128.4 ms) ---
+{
+    "AccessResult": "Success",
+    "nResult": 0
+}
+```
+
+`toCurl()` keeps the body exactly as sent, so the command reproduces the call:
+
+```bash
+curl -X POST 'https://your-server.com/FvsServicePure.svc/InsertNewOperation' \
+  -H 'UserName: demo' \
+  -H 'Password: ***' \
+  -H 'Accept: application/json' \
+  -H 'Language: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{"ItemClassName":"PardDok","sParametras":"PARD","xmlstring":"{\"PardDok\":{\"sKlientas\":\"C001\"}}"}'
+```
+
+Under `CredentialMode::Env` the quoting is placeholder-aware, so the command runs as-is once
+the variables are exported and the secret never appears in the output:
+
+```bash
+export FVS_PASSWORD='your-password'
+
+curl -X POST 'https://your-server.com/FvsServicePure.svc/InsertNewOperation' \
+  -H 'UserName: demo' \
+  -H 'Password: '"$FVS_PASSWORD" \
+  -H 'Accept: application/json' \
+  -H 'Language: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{"ItemClassName":"PardDok","sParametras":"PARD","xmlstring":"{\"PardDok\":{\"sKlientas\":\"C001\"}}"}'
+```
+
+The placeholders are `$FVS_PASSWORD` (the `Password` header), `$FVS_CONN_STRING` (the
+`ConnString` header), and `$FVS_SPASSWORD` (the `sPassword` parameter used when changing
+another user's password). The SDK only emits them — it never reads them from the environment.
+
+Each `Exchange` exposes `method`, `url`, `headers`, `body`, `statusCode`, `reasonPhrase`,
+`responseHeaders`, `responseBody`, `durationMs`, `error`, and `attempt`, plus `toString()`,
+`toCurl()`, `toArray()`, and `withCredentials()`.
+
+Worth knowing:
+
+- **Credentials are masked** (`Password`, `ConnString`, `sPassword`) unless you choose
+  another mode — substitution happens as the exchange is recorded, so the buffer never holds
+  the real password. A masked curl needs the real value substituted before it runs; an `Env`
+  curl just needs the variables exported.
+- **PSR-3 logging always masks**, whatever the recording mode is set to.
+- **`Content-Type: application/json` in curl output is inferred.** Guzzle adds it for JSON
+  bodies; the SDK does not set it itself.
+- **Recordings are the SDK's view of the request.** The recorded URL and body reproduce
+  Guzzle's own resolution and encoding (RFC 3986 query encoding, the same JSON encoding
+  Guzzle applies to the `json` option), but if you inject your own Guzzle client with extra
+  default headers or middleware, those additions are not reflected.
+- **Failures are recorded, then rethrown.** A 4xx/5xx exchange carries the status and error
+  body; a connection failure carries `error` with no status.
+- **Retries record one exchange per attempt**, each with its own `attempt` number and duration.
+- Bodies are stored whole — unlike PSR-3 logging, there is no 100 KB truncation. Keep
+  `limit` modest in long-running processes.
 
 ### Retry Policy
 
