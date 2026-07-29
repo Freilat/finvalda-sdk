@@ -95,6 +95,40 @@ final class Exchange implements Stringable
         ];
     }
 
+    /**
+     * A curl command reproducing this request. The body is byte-exact (not
+     * pretty-printed); masked credentials must be substituted before running it.
+     */
+    public function toCurl(): string
+    {
+        $parts = ["curl -X {$this->method} " . $this->quote($this->url)];
+
+        $headers = $this->headers;
+
+        if ($this->body !== null && $this->body !== '' && ! isset($headers['Content-Type'])) {
+            // Guzzle sets this for JSON bodies; buildHeaders() does not.
+            $headers['Content-Type'] = 'application/json';
+        }
+
+        foreach ($headers as $name => $value) {
+            $parts[] = '  -H ' . $this->quote("{$name}: {$value}");
+        }
+
+        if ($this->body !== null && $this->body !== '') {
+            $parts[] = '  -d ' . $this->quote($this->body);
+        }
+
+        return implode(" \\\n", $parts);
+    }
+
+    /**
+     * Wrap a value in single quotes for a POSIX shell.
+     */
+    private function quote(string $value): string
+    {
+        return "'" . str_replace("'", "'\\''", $value) . "'";
+    }
+
     private function statusLine(): string
     {
         $duration = round($this->durationMs, 1);

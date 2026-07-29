@@ -129,4 +129,85 @@ class ExchangeTest extends TestCase
         $this->assertNull($array['response']['error']);
         $this->assertSame(1, $array['attempt']);
     }
+
+    public function test_curl_renders_method_url_headers_and_body(): void
+    {
+        $curl = $this->operationExchange()->toCurl();
+
+        $this->assertStringContainsString(
+            "curl -X POST 'https://example.com/FvsServicePure.svc/InsertNewOperation'",
+            $curl,
+        );
+        $this->assertStringContainsString("-H 'UserName: demo'", $curl);
+        $this->assertStringContainsString("-H 'Password: ***'", $curl);
+        $this->assertStringContainsString("-H 'Content-Type: application/json'", $curl);
+        // Body is byte-exact, not pretty-printed
+        $this->assertStringContainsString(
+            '-d \'{"ItemClassName":"PardDok","xmlstring":"{\"PardDok\":{\"sZurnalas\":\"PARD\"}}"}\'',
+            $curl,
+        );
+    }
+
+    public function test_curl_uses_line_continuations(): void
+    {
+        $this->assertStringContainsString(" \\\n", $this->operationExchange()->toCurl());
+    }
+
+    public function test_curl_omits_data_flag_for_bodyless_requests(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes?sKodas=ABC',
+            headers: ['UserName' => 'demo'],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: '{"AccessResult":"Success"}',
+            durationMs: 12.0,
+        );
+
+        $curl = $exchange->toCurl();
+
+        $this->assertStringNotContainsString('-d ', $curl);
+        $this->assertStringNotContainsString('Content-Type', $curl);
+        $this->assertStringContainsString("'https://example.com/FvsServicePure.svc/GetPrekes?sKodas=ABC'", $curl);
+    }
+
+    public function test_curl_escapes_single_quotes_in_body(): void
+    {
+        $exchange = new Exchange(
+            method: 'POST',
+            url: 'https://example.com/FvsServicePure.svc/InsertNewItem',
+            headers: [],
+            body: '{"sPavadinimas":"O\'Brien"}',
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $this->assertStringContainsString('O\'\\\'\'Brien', $exchange->toCurl());
+    }
+
+    public function test_curl_keeps_a_captured_content_type_header(): void
+    {
+        $exchange = new Exchange(
+            method: 'POST',
+            url: 'https://example.com/FvsServicePure.svc/InsertNewItem',
+            headers: ['Content-Type' => 'text/xml'],
+            body: '<Preke />',
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $curl = $exchange->toCurl();
+
+        $this->assertStringContainsString("-H 'Content-Type: text/xml'", $curl);
+        $this->assertStringNotContainsString('application/json', $curl);
+    }
 }
