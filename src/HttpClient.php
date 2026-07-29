@@ -22,6 +22,8 @@ use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\UriResolver;
+use GuzzleHttp\Psr7\Utils;
 use Psr\Log\LoggerInterface;
 
 final class HttpClient
@@ -358,18 +360,27 @@ final class HttpClient
     }
 
     /**
+     * Reproduces the URL Guzzle actually requests: same base-URI resolution
+     * (`Psr7\UriResolver::resolve()`, as used by `Client::buildUri()` — a
+     * leading-slash endpoint replaces the base path instead of appending to
+     * it) and the same query encoding (`http_build_query(..., PHP_QUERY_RFC3986)`,
+     * as used by `Client`'s `query` option handling — spaces become `%20`,
+     * not `+`).
+     *
      * @param  array<string, mixed>  $options
      */
     private function recordedUrl(string $endpoint, array $options): string
     {
-        $url = rtrim($this->config->baseUrl, '/') . '/' . ltrim($endpoint, '/');
+        $base = Utils::uriFor(rtrim($this->config->baseUrl, '/') . '/');
+        $uri = UriResolver::resolve($base, Utils::uriFor($endpoint));
+
         $query = $options['query'] ?? [];
 
         if (is_array($query) && $query !== []) {
-            return $url . '?' . http_build_query($query);
+            $uri = $uri->withQuery(http_build_query($query, '', '&', PHP_QUERY_RFC3986));
         }
 
-        return $url;
+        return (string) $uri;
     }
 
     /**

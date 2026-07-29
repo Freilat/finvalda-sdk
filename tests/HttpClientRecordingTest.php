@@ -12,6 +12,7 @@ use Finvalda\Retry\RetryPolicy;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 
@@ -229,5 +230,78 @@ class HttpClientRecordingTest extends TestCase
         );
         $this->assertStringContainsString("-H 'Content-Type: application/json'", $curl);
         $this->assertStringContainsString('-d ', $curl);
+    }
+
+    public function test_recorded_url_matches_the_query_string_guzzle_actually_sends(): void
+    {
+        $history = [];
+
+        $baseUrl = 'https://example.com/FvsServicePure.svc';
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ]);
+        $stack = HandlerStack::create($mock);
+        $stack->push(Middleware::history($history));
+
+        $guzzle = new Client([
+            'handler' => $stack,
+            'base_uri' => rtrim($baseUrl, '/') . '/',
+        ]);
+
+        $config = new FinvaldaConfig(
+            baseUrl: $baseUrl,
+            username: 'demo',
+            password: 'secret-password',
+        );
+
+        $httpClient = new HttpClient($config, $guzzle);
+
+        $httpClient->record();
+        $httpClient->get('GetPrekes', ['sPavadinimas' => 'A B']);
+
+        $exchange = $httpClient->lastRecording();
+        $this->assertNotNull($exchange);
+
+        $sentUri = (string) $history[0]['request']->getUri();
+
+        $this->assertSame($sentUri, $exchange->url);
+        $this->assertStringContainsString('A%20B', $exchange->url);
+        $this->assertStringNotContainsString('A+B', $exchange->url);
+    }
+
+    public function test_recorded_url_matches_a_leading_slash_endpoint_that_guzzle_actually_requests(): void
+    {
+        $history = [];
+
+        $baseUrl = 'https://example.com/FvsServicePure.svc';
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['AccessResult' => 'Success'])),
+        ]);
+        $stack = HandlerStack::create($mock);
+        $stack->push(Middleware::history($history));
+
+        $guzzle = new Client([
+            'handler' => $stack,
+            'base_uri' => rtrim($baseUrl, '/') . '/',
+        ]);
+
+        $config = new FinvaldaConfig(
+            baseUrl: $baseUrl,
+            username: 'demo',
+            password: 'secret-password',
+        );
+
+        $httpClient = new HttpClient($config, $guzzle);
+
+        $httpClient->record();
+        $httpClient->get('/GetPrekes');
+
+        $exchange = $httpClient->lastRecording();
+        $this->assertNotNull($exchange);
+
+        $sentUri = (string) $history[0]['request']->getUri();
+
+        $this->assertSame($sentUri, $exchange->url);
+        $this->assertSame('https://example.com/GetPrekes', $exchange->url);
     }
 }
