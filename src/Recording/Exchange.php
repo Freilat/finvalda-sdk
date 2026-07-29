@@ -179,7 +179,13 @@ final class Exchange implements Stringable
             return $url;
         }
 
-        return str_replace($query, http_build_query($substituted), $url);
+        $offset = strpos($url, '?');
+
+        if ($offset === false) {
+            return $url;
+        }
+
+        return substr_replace($url, http_build_query($substituted), $offset + 1, strlen($query));
     }
 
     private function substituteBody(?string $body, CredentialMode $mode): ?string

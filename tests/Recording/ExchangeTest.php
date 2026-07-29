@@ -376,6 +376,47 @@ class ExchangeTest extends TestCase
         $this->assertStringContainsString('"sPassword":"***"', (string) $body);
     }
 
+    public function test_masked_mode_substitutes_the_query_by_offset_not_by_content(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/sKodas=ADMIN&sPassword=secret/api?sKodas=ADMIN&sPassword=secret',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Masked)->url;
+
+        // The path occurrence is untouched; only the real query is substituted.
+        $this->assertStringContainsString('/sKodas=ADMIN&sPassword=secret/api?', $url);
+        $this->assertStringContainsString('sPassword=%2A%2A%2A', $url);
+        $this->assertStringNotContainsString('sPassword=secret', substr($url, (int) strpos($url, '?')));
+    }
+
+    public function test_a_credential_free_query_is_returned_byte_identical(): void
+    {
+        $exchange = new Exchange(
+            method: 'GET',
+            url: 'https://example.com/FvsServicePure.svc/GetPrekes?sKodas=ABC&tData=2026-01-01',
+            headers: [],
+            body: null,
+            statusCode: 200,
+            reasonPhrase: 'OK',
+            responseHeaders: [],
+            responseBody: null,
+            durationMs: 1.0,
+        );
+
+        $url = $exchange->withCredentials(CredentialMode::Masked)->url;
+
+        $this->assertSame($exchange->url, $url);
+    }
+
     public function test_substitution_leaves_a_credential_free_body_byte_identical(): void
     {
         $exchange = $this->operationExchange();
