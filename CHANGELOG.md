@@ -37,6 +37,8 @@ shipped nowhere to put those records, so every consumer wrote a file sink.
   SDK's own 100 KB body cap so records the SDK already truncated are not marked twice).
 - Configure it via `log_path` (`FINVALDA_LOG_PATH` in Laravel) instead of constructing
   it by hand; `log_channel`/`FINVALDA_LOG_CHANNEL` takes precedence when both are set.
+- Entries hold whole request and response bodies, so a log file this class creates is
+  chmod'ed `0640`; an existing file keeps whatever permissions it already has.
 - No rotation, no buffering, no level filter — rotate with logrotate, filter with `jq`.
   A failing sink cannot break an API call: the first failure on each logger instance is
   reported through the PHP error log and the rest are silent. Redaction stays in

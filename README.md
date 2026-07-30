@@ -269,8 +269,9 @@ rotation (use logrotate), no buffering and no level filter. A failing sink canno
 an API call: the first failure on each logger instance is reported through the PHP error
 log and the rest are silent. Credentials are already redacted before a record reaches
 any logger, so the sink does not redact again. The file still holds full request and
-response bodies — client names, debts, invoice contents — and is created with default
-umask permissions, so restrict its path to operators who should see that data.
+response bodies — client names, debts, invoice contents — so it is created `0640`, and
+the permissions of a file that already exists are left alone. Place it where only
+operators who should see that data can reach it; the directory is yours to lock down.
 
 In Laravel, set `FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log` instead of
 constructing the logger by hand — `FINVALDA_LOG_CHANNEL` takes precedence when both are

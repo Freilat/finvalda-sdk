@@ -40,6 +40,35 @@ class JsonLinesLoggerTest extends TestCase
         rmdir($this->dir);
     }
 
+    public function test_it_creates_the_log_file_unreadable_to_other_users(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+
+        (new JsonLinesLogger($path))->debug('Finvalda API request');
+
+        $this->assertSame(
+            0o640,
+            fileperms($path) & 0o777,
+            'the log holds full request and response bodies, so it must not be world-readable',
+        );
+    }
+
+    public function test_it_leaves_the_permissions_of_an_existing_log_file_alone(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+        mkdir($this->dir, 0o775, true);
+        touch($path);
+        chmod($path, 0o600);
+
+        (new JsonLinesLogger($path))->debug('Finvalda API request');
+
+        $this->assertSame(
+            0o600,
+            fileperms($path) & 0o777,
+            'an operator who tightened the file must not have it widened on the next write',
+        );
+    }
+
     public function test_it_appends_one_json_object_per_record(): void
     {
         $path = $this->dir . '/finvalda.log';

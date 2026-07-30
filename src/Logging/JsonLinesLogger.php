@@ -81,8 +81,16 @@ final class JsonLinesLogger extends AbstractLogger
                 @mkdir($directory, 0775, true);
             }
 
+            // Entries carry whole request and response bodies — client names,
+            // debts, invoice contents — so the file this class creates must not
+            // be world-readable. Only on creation: an operator who tightened an
+            // existing file keeps their permissions.
+            $created = ! is_file($this->path);
+
             if (@file_put_contents($this->path, $line . "\n", FILE_APPEND | LOCK_EX) === false) {
                 $this->reportFailure('could not write to the log file');
+            } elseif ($created) {
+                @chmod($this->path, 0640);
             }
         } catch (Throwable $e) {
             $this->reportFailure($e::class . ': ' . $e->getMessage());
