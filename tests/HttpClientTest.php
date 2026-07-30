@@ -46,6 +46,67 @@ class HttpClientTest extends TestCase
         return new HttpClient($config, $guzzle);
     }
 
+    /**
+     * @param  array<int, Response>  $responses
+     * @param  array<int, array{request: \Psr\Http\Message\RequestInterface}>  $history
+     */
+    private function createHttpClientWithConfig(
+        FinvaldaConfig $config,
+        array $responses,
+        array &$history,
+    ): HttpClient {
+        $handlerStack = HandlerStack::create(new MockHandler($responses));
+        $handlerStack->push(Middleware::history($history));
+
+        return new HttpClient($config, new Client(['handler' => $handlerStack]));
+    }
+
+    public function test_it_sends_credential_headers_on_a_caller_supplied_client(): void
+    {
+        $history = [];
+        $httpClient = $this->createHttpClientWithConfig(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                connString: 'Server=db',
+                companyId: 'htrailer',
+            ),
+            [new Response(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $httpClient->get('GetPrekes');
+
+        $request = $history[0]['request'];
+        $this->assertSame('demo', $request->getHeaderLine('UserName'));
+        $this->assertSame('secret', $request->getHeaderLine('Password'));
+        $this->assertSame('Server=db', $request->getHeaderLine('ConnString'));
+        $this->assertSame('htrailer', $request->getHeaderLine('CompanyID'));
+        $this->assertSame('application/json', $request->getHeaderLine('Accept'));
+        $this->assertSame('0', $request->getHeaderLine('Language'));
+    }
+
+    public function test_it_omits_the_company_header_when_no_company_is_configured(): void
+    {
+        $history = [];
+        $httpClient = $this->createHttpClientWithConfig(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+            ),
+            [new Response(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $httpClient->get('GetPrekes');
+
+        $request = $history[0]['request'];
+        $this->assertFalse($request->hasHeader('CompanyID'));
+        $this->assertFalse($request->hasHeader('ConnString'));
+    }
+
     public function test_operation_result_with_access_result_fail_and_nresult_zero_returns_failure(): void
     {
         $httpClient = $this->createHttpClient([

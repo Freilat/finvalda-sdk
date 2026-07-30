@@ -71,7 +71,6 @@ final class HttpClient
         $this->client = $client ?? new Client([
             'base_uri' => rtrim($this->config->baseUrl, '/') . '/',
             'timeout' => $this->config->timeout,
-            'headers' => $this->buildHeaders(),
         ]);
         $this->logger = $this->config->logger;
         $this->retryHandler = $this->config->retry !== null
@@ -288,6 +287,12 @@ final class HttpClient
             $options['json'] = $this->normalizer->normalize($options['json']);
         }
 
+        // Auth headers travel with every request rather than sitting in the
+        // Guzzle client's defaults: a caller-supplied ClientInterface would
+        // otherwise send none, and the debug/recording surfaces below would
+        // report headers that never went out.
+        $options['headers'] = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+
         $attempt = 0;
 
         $doRequest = function () use ($method, $endpoint, $options, &$attempt): string {
@@ -300,7 +305,7 @@ final class HttpClient
                 $this->lastRequest = [
                     'method' => $method,
                     'url' => rtrim($this->config->baseUrl, '/') . '/' . $endpoint,
-                    'headers' => Redactor::apply(array_merge($this->buildHeaders(), $options['headers'] ?? [])),
+                    'headers' => Redactor::apply($options['headers']),
                     'body' => $options['body'] ?? $options['form_params'] ?? $options['json'] ?? null,
                 ];
             }
@@ -417,7 +422,7 @@ final class HttpClient
     private function recordedHeaders(array $options): array
     {
         /** @var array<string, string> $headers */
-        $headers = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+        $headers = $options['headers'] ?? [];
 
         return $headers;
     }
