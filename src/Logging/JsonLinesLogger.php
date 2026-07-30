@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda\Logging;
 
+use DateTimeImmutable;
 use Finvalda\Support\BodyTruncator;
 use Psr\Log\AbstractLogger;
 use Stringable;
@@ -42,7 +43,8 @@ final class JsonLinesLogger extends AbstractLogger
     {
         try {
             $entry = [
-                'ts' => date('Y-m-d H:i:s'),
+                'ts' => (new DateTimeImmutable())->format('Y-m-d\TH:i:s.vP'),
+                'pid' => getmypid(),
                 'level' => is_scalar($level) ? (string) $level : gettype($level),
                 'message' => (string) $message,
             ] + $this->truncate($context);

@@ -55,7 +55,7 @@ class JsonLinesLoggerTest extends TestCase
         $this->assertSame(200, $second['status_code']);
     }
 
-    public function test_each_entry_carries_a_timestamp_and_level(): void
+    public function test_each_entry_carries_an_ordered_timestamp_a_pid_and_a_level(): void
     {
         $path = $this->dir . '/finvalda.log';
 
@@ -64,7 +64,12 @@ class JsonLinesLoggerTest extends TestCase
         $entry = json_decode(trim(file_get_contents($path)), true, flags: JSON_THROW_ON_ERROR);
 
         $this->assertSame('debug', $entry['level']);
-        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $entry['ts']);
+        $this->assertSame(getmypid(), $entry['pid']);
+        $this->assertMatchesRegularExpression(
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/',
+            $entry['ts'],
+            'ts needs millisecond precision and an offset to order and correlate entries',
+        );
     }
 
     public function test_it_truncates_long_context_strings_at_any_depth(): void
