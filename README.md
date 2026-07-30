@@ -12,6 +12,7 @@ Built from the official [Finvalda API documentation](https://documenter.getpostm
 - [Configuration](#configuration)
   - [Basic Configuration](#basic-configuration)
   - [Laravel Integration](#laravel-integration)
+  - [Company-Scoped Clients](#company-scoped-clients)
   - [Logging](#logging)
   - [Recording Requests](#recording-requests)
   - [Retry Policy](#retry-policy)
@@ -157,6 +158,8 @@ FINVALDA_COMPANY_ID=your-company-id
 
 # Optional: route SDK debug logs to a Laravel log channel
 FINVALDA_LOG_CHANNEL=stack
+# Optional: or write to a JSON-lines file instead (FINVALDA_LOG_CHANNEL wins if both are set)
+FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log
 
 # Optional: retry transient failures with exponential backoff
 FINVALDA_RETRY_ENABLED=true
@@ -189,6 +192,32 @@ use Finvalda\Laravel\Facades\Finvalda;
 $clients = Finvalda::clients()->collect();
 ```
 
+### Company-Scoped Clients
+
+`companyId` sets the `CompanyID` header on every request. Some things are registered
+per company — report templates in particular — so an individual call sometimes needs a
+different company than the one the client was configured with:
+
+```php
+// Render a template that exists only on the default company (no CompanyID header)
+// for a document created under this client's company.
+$pdf = $finvalda->withoutCompany()->reports()->makeInvoicePdf($params);
+
+// Or target another company explicitly.
+$clients = $finvalda->withCompany('HTNT')->clients()->collect();
+```
+
+Both return a client that shares this one's transport and observability state —
+logger, debug capture and recorder — so company-scoped calls show up in
+`getLastDebugInfo()` and `recordings()` whether logging, debug or recording was
+switched on before or after the company client was created, and turning any of them
+off reaches both. A custom `HttpClient` you injected keeps being used. Repeated calls
+for the same company return the same client, so calling this in a loop over one company
+is fine — but each *distinct* company you pass is retained for the parent's lifetime,
+which matters when the parent is a long-lived singleton (e.g. the Laravel binding).
+
+`FinvaldaConfig::withCompanyId()` does the same at the config level.
+
 ### Logging
 
 Enable PSR-3 logging for request/response debugging:
@@ -212,6 +241,41 @@ $finvalda->setLogger($logger);
 ```
 
 Both records are logged at `debug` level. `Finvalda API request` includes method, endpoint, parameters, and the full request body (`body`, string or null for GET). `Finvalda API response` includes method, endpoint, status code, response time, and the full response body (`body`). Bodies larger than 100 KB are truncated with a `... [truncated N bytes]` marker — route the SDK's debug-level records to a suitable handler if log volume is a concern.
+
+#### Logging to a file without a logging framework
+
+`JsonLinesLogger` is a PSR-3 sink that appends one JSON object per line — enough to
+grep with `jq`, and no dependency beyond the `psr/log` the SDK already requires:
+
+```php
+use Finvalda\Logging\JsonLinesLogger;
+
+$config = new FinvaldaConfig(
+    // ...
+    logger: new JsonLinesLogger('/var/log/finvalda/finvalda.log'),
+);
+```
+
+```bash
+jq 'select(.status_code >= 400)' /var/log/finvalda/finvalda.log
+```
+
+Each entry carries `ts` (ISO 8601, milliseconds, with offset), `pid`, `level` and
+`message`, plus the context keys merged in flat; a context key colliding with one of
+those four is written prefixed, e.g. `context_message`. The `pid` matters when several
+processes append to one file: `LOCK_EX` keeps lines intact but interleaves them, so
+group by `pid` rather than by adjacency. Missing directories are created. There is no
+rotation (use logrotate), no buffering and no level filter. A failing sink cannot break
+an API call: the first failure on each logger instance is reported through the PHP error
+log and the rest are silent. Credentials are already redacted before a record reaches
+any logger, so the sink does not redact again. The file still holds full request and
+response bodies — client names, debts, invoice contents — so it is created `0640`, and
+the permissions of a file that already exists are left alone. Place it where only
+operators who should see that data can reach it; the directory is yours to lock down.
+
+In Laravel, set `FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log` instead of
+constructing the logger by hand — `FINVALDA_LOG_CHANNEL` takes precedence when both are
+set.
 
 ### Debug Mode
 

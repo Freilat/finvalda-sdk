@@ -22,6 +22,7 @@ PHP SDK/Composer package for the Finvalda (FVS) Lithuanian accounting/ERP softwa
 ## HTTP Transport Patterns
 The Pure endpoint (FvsServicePure.svc) supports both query params and JSON body. The SDK uses JSON body for all POST write operations:
 
+- **Headers** — `buildHeaders()` is merged into `$options['headers']` on every request, not set as Guzzle client defaults, so an injected `ClientInterface` still authenticates and tests can assert headers on the wire.
 - **`postOperation()`** — JSON body with `{"ItemClassName":"...","xmlstring":"..."}`. Used for: InsertNewItem, EditItem, InsertNewOperation, UpdateOperation, DeleteOperation, EditItemProps, AppendGroup, InsertDocument, DeleteDocument, AttachDocument
 - **`postOperationJson()`** — Flat JSON body or `{"input":{...}}` wrapper. Used for: LockOperation, UnLockOperation, ChangeJournal (`{sJournal, nOpNumber, sJournalNew}`), CopyOperation (`{input:{...}}`), DeleteItem (`{input:{ItemClassName, Code}}`)
 - **`postJson()`** — Custom JSON body returning Response. Used for: GetDescriptions (`{readParams:{...}}`), GetOperations POST (`{opReadParams:{...}}`), IsOperationLocked, GetVeiklaPagalObjektus, GetRecommendedPrice
@@ -59,7 +60,9 @@ src/
   Builders/                 # 18 fluent operation builders (OperationBuilder base + 17 concrete)
   Enums/                    # AccessResult, Language, ItemClass, OperationClass, OpClass, CredentialMode, etc.
   Exceptions/               # FinvaldaException, AccessDeniedException, ValidationException
+  Debug/                    # Diagnostics (shared logger/debug/recorder state) + LastExchange snapshot
   Filters/                  # TransactionFilter, PaymentFilter DTOs
+  Logging/                  # JsonLinesLogger (PSR-3 file sink, one JSON object per line)
   Recording/                # Exchange value object + Recorder ring buffer
   Resources/                # 15 resource classes (Stock, Clients, Products, etc.)
   Responses/                # Response, OperationResult

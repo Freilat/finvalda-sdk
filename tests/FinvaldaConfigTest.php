@@ -5,8 +5,11 @@ namespace Finvalda\Tests;
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
 use Finvalda\FinvaldaConfig;
+use Finvalda\Logging\JsonLinesLogger;
+use Finvalda\Retry\RetryPolicy;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use ReflectionClass;
 
 class FinvaldaConfigTest extends TestCase
 {
@@ -191,5 +194,99 @@ class FinvaldaConfigTest extends TestCase
         ]);
 
         $this->assertSame(CredentialMode::Masked, $config->recordCredentials);
+    }
+
+    public function test_with_company_id_carries_every_other_field_over_unchanged(): void
+    {
+        $config = $this->fullyPopulatedConfig();
+
+        $copy = $config->withCompanyId('HTNT');
+
+        $this->assertSame('HTNT', $copy->companyId);
+        $this->assertNotSame($config, $copy);
+
+        foreach ((new ReflectionClass(FinvaldaConfig::class))->getProperties() as $property) {
+            if ($property->getName() === 'companyId') {
+                continue;
+            }
+
+            $this->assertSame(
+                $property->getValue($config),
+                $property->getValue($copy),
+                "withCompanyId() did not carry over {$property->getName()}",
+            );
+        }
+    }
+
+    public function test_with_company_id_accepts_null_to_target_the_default_company(): void
+    {
+        $config = $this->fullyPopulatedConfig();
+
+        $this->assertNull($config->withCompanyId(null)->companyId);
+    }
+
+    public function test_from_array_builds_a_json_lines_logger_from_log_path(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '/tmp/finvalda-test.log',
+        ]);
+
+        $this->assertInstanceOf(JsonLinesLogger::class, $config->logger);
+    }
+
+    public function test_from_array_prefers_an_explicit_logger_over_log_path(): void
+    {
+        $logger = new NullLogger();
+
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '/tmp/finvalda-test.log',
+        ], $logger);
+
+        $this->assertSame($logger, $config->logger);
+    }
+
+    public function test_from_array_ignores_an_empty_log_path(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '',
+        ]);
+
+        $this->assertNull($config->logger);
+    }
+
+    /**
+     * Every field set away from its default, so a field withCompanyId() forgets
+     * to forward shows up as a difference rather than matching by coincidence.
+     */
+    private function fullyPopulatedConfig(): FinvaldaConfig
+    {
+        return new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            connString: 'Server=db',
+            companyId: 'htrailer',
+            language: Language::English,
+            removeEmptyStringTags: true,
+            removeZeroNumberTags: true,
+            removeNewLines: true,
+            timeout: 60,
+            logger: new NullLogger(),
+            retry: new RetryPolicy(maxAttempts: 5),
+            normalizeFloats: false,
+            floatPrecision: 2,
+            record: true,
+            recordLimit: 5,
+            recordCredentials: CredentialMode::Real,
+        );
     }
 }

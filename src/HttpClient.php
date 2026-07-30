@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda;
 
+use Finvalda\Debug\Diagnostics;
 use Finvalda\Enums\AccessResult;
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\AccessDeniedException;
@@ -11,7 +12,6 @@ use Finvalda\Exceptions\FinvaldaException;
 use Finvalda\Exceptions\NetworkException;
 use Finvalda\Exceptions\ServerException;
 use Finvalda\Recording\Exchange;
-use Finvalda\Recording\Recorder;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
@@ -46,19 +46,9 @@ final class HttpClient
 
     private ClientInterface $client;
 
-    private ?LoggerInterface $logger;
-
-    private ?RetryHandler $retryHandler;
-
     private OutboundNumericNormalizer $normalizer;
 
-    private bool $debug = false;
-
-    private array $lastRequest = [];
-
-    private array $lastResponse = [];
-
-    private ?Recorder $recorder = null;
+    private Diagnostics $diagnostics;
 
     /**
      * @param FinvaldaConfig $config SDK configuration
@@ -71,19 +61,15 @@ final class HttpClient
         $this->client = $client ?? new Client([
             'base_uri' => rtrim($this->config->baseUrl, '/') . '/',
             'timeout' => $this->config->timeout,
-            'headers' => $this->buildHeaders(),
         ]);
-        $this->logger = $this->config->logger;
-        $this->retryHandler = $this->config->retry !== null
-            ? new RetryHandler($this->config->retry, $this->logger)
-            : null;
+        $this->diagnostics = new Diagnostics($this->config->logger);
         $this->normalizer = new OutboundNumericNormalizer(
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
         );
 
         if ($this->config->record) {
-            $this->recorder = new Recorder(
+            $this->diagnostics->startRecording(
                 $this->config->recordLimit,
                 $this->config->recordCredentials,
             );
@@ -91,11 +77,51 @@ final class HttpClient
     }
 
     /**
+     * A retry handler bound to the diagnostics logger as it stands right now.
+     * Built fresh per retried request rather than cached, so it always reflects
+     * the current logger — shared, via Diagnostics, with every sibling created
+     * through withCompanyId().
+     */
+    private function retryHandler(): ?RetryHandler
+    {
+        return $this->config->retry !== null
+            ? new RetryHandler($this->config->retry, $this->diagnostics->logger())
+            : null;
+    }
+
+    /**
+     * The configuration this transport was built from.
+     */
+    public function getConfig(): FinvaldaConfig
+    {
+        return $this->config;
+    }
+
+    /**
+     * A transport bound to another company — or, with null, to Finvalda's
+     * default company, which omits the CompanyID header.
+     *
+     * Shares this transport's Guzzle client and diagnostics (logger, debug
+     * capture and recorder), so a company-scoped call still shows up in this
+     * client's getLastDebugInfo() and recordings(), and switching logging,
+     * debug or recording on or off later reaches both. Safe with a
+     * caller-supplied client: since headers are built per request, company
+     * identity does not live in the transport.
+     */
+    public function withCompanyId(?string $companyId): self
+    {
+        $copy = new self($this->config->withCompanyId($companyId), $this->client);
+        $copy->diagnostics = $this->diagnostics;
+
+        return $copy;
+    }
+
+    /**
      * Set the logger instance for request/response logging.
      */
     public function setLogger(?LoggerInterface $logger): void
     {
-        $this->logger = $logger;
+        $this->diagnostics->setLogger($logger);
     }
 
     /**
@@ -104,12 +130,7 @@ final class HttpClient
      */
     public function setDebug(bool $debug): void
     {
-        $this->debug = $debug;
-
-        if (! $debug) {
-            $this->lastRequest = [];
-            $this->lastResponse = [];
-        }
+        $this->diagnostics->setDebug($debug);
     }
 
     /**
@@ -120,10 +141,7 @@ final class HttpClient
      */
     public function getLastDebugInfo(): array
     {
-        return [
-            'request' => $this->lastRequest,
-            'response' => $this->lastResponse,
-        ];
+        return $this->diagnostics->lastExchange()->toArray();
     }
 
     /**
@@ -135,7 +153,7 @@ final class HttpClient
      */
     public function record(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked): void
     {
-        $this->recorder = new Recorder($limit, $credentials);
+        $this->diagnostics->startRecording($limit, $credentials);
     }
 
     /**
@@ -143,7 +161,7 @@ final class HttpClient
      */
     public function stopRecording(): void
     {
-        $this->recorder = null;
+        $this->diagnostics->stopRecording();
     }
 
     /**
@@ -153,12 +171,12 @@ final class HttpClient
      */
     public function recordings(): array
     {
-        return $this->recorder?->all() ?? [];
+        return $this->diagnostics->recorder()?->all() ?? [];
     }
 
     public function lastRecording(): ?Exchange
     {
-        return $this->recorder?->last();
+        return $this->diagnostics->recorder()?->last();
     }
 
     public function get(string $endpoint, array $params = []): Response
@@ -280,6 +298,12 @@ final class HttpClient
             $options['json'] = $this->normalizer->normalize($options['json']);
         }
 
+        // Auth headers travel with every request rather than sitting in the
+        // Guzzle client's defaults: a caller-supplied ClientInterface would
+        // otherwise send none, and the debug/recording surfaces below would
+        // report headers that never went out.
+        $options['headers'] = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+
         $attempt = 0;
 
         $doRequest = function () use ($method, $endpoint, $options, &$attempt): string {
@@ -288,13 +312,13 @@ final class HttpClient
 
             $this->logRequest($method, $endpoint, $options);
 
-            if ($this->debug) {
-                $this->lastRequest = [
+            if ($this->diagnostics->debugEnabled()) {
+                $this->diagnostics->lastExchange()->setRequest([
                     'method' => $method,
                     'url' => rtrim($this->config->baseUrl, '/') . '/' . $endpoint,
-                    'headers' => Redactor::apply(array_merge($this->buildHeaders(), $options['headers'] ?? [])),
+                    'headers' => Redactor::apply($options['headers']),
                     'body' => $options['body'] ?? $options['form_params'] ?? $options['json'] ?? null,
-                ];
+                ]);
             }
 
             try {
@@ -310,15 +334,15 @@ final class HttpClient
             $duration = microtime(true) - $startTime;
             $this->logResponse($method, $endpoint, $response->getStatusCode(), $duration, $body);
 
-            if ($this->debug) {
-                $this->lastResponse = [
+            if ($this->diagnostics->debugEnabled()) {
+                $this->diagnostics->lastExchange()->setResponse([
                     'status_code' => $response->getStatusCode(),
                     'headers' => $response->getHeaders(),
                     'body' => $body,
-                ];
+                ]);
             }
 
-            $this->recorder?->record(new Exchange(
+            $this->diagnostics->recorder()?->record(new Exchange(
                 method: $method,
                 url: $this->recordedUrl($endpoint, $options),
                 headers: $this->recordedHeaders($options),
@@ -334,8 +358,10 @@ final class HttpClient
             return $body;
         };
 
-        if ($this->retryHandler !== null) {
-            return $this->withShortestFloatEncoding(fn (): string => $this->retryHandler->execute($doRequest));
+        $retryHandler = $this->retryHandler();
+
+        if ($retryHandler !== null) {
+            return $this->withShortestFloatEncoding(fn (): string => $retryHandler->execute($doRequest));
         }
 
         return $this->withShortestFloatEncoding($doRequest);
@@ -355,13 +381,15 @@ final class HttpClient
         float $duration,
         int $attempt,
     ): void {
-        if ($this->recorder === null) {
+        $recorder = $this->diagnostics->recorder();
+
+        if ($recorder === null) {
             return;
         }
 
         $response = $e instanceof RequestException && $e->hasResponse() ? $e->getResponse() : null;
 
-        $this->recorder->record(new Exchange(
+        $recorder->record(new Exchange(
             method: $method,
             url: $this->recordedUrl($endpoint, $options),
             headers: $this->recordedHeaders($options),
@@ -409,7 +437,7 @@ final class HttpClient
     private function recordedHeaders(array $options): array
     {
         /** @var array<string, string> $headers */
-        $headers = array_merge($this->buildHeaders(), $options['headers'] ?? []);
+        $headers = $options['headers'] ?? [];
 
         return $headers;
     }
@@ -435,34 +463,40 @@ final class HttpClient
 
     private function logRequest(string $method, string $endpoint, array $options): void
     {
-        if ($this->logger === null) {
+        $logger = $this->diagnostics->logger();
+
+        if ($logger === null) {
             return;
         }
 
         $body = $options['body']
             ?? (isset($options['json']) ? json_encode($options['json']) : null);
 
-        $this->logger->debug('Finvalda API request', [
+        $logger->debug('Finvalda API request', [
             'method' => $method,
             'endpoint' => $endpoint,
             'params' => Redactor::apply($options['query'] ?? $options['json'] ?? []),
             'has_body' => isset($options['body']) || isset($options['json']),
             'body' => $this->truncateForLog(is_string($body) ? $body : null),
+            'company' => $this->config->companyId,
         ]);
     }
 
     private function logResponse(string $method, string $endpoint, int $statusCode, float $duration, string $body): void
     {
-        if ($this->logger === null) {
+        $logger = $this->diagnostics->logger();
+
+        if ($logger === null) {
             return;
         }
 
-        $this->logger->debug('Finvalda API response', [
+        $logger->debug('Finvalda API response', [
             'method' => $method,
             'endpoint' => $endpoint,
             'status_code' => $statusCode,
             'duration_ms' => round($duration * 1000, 2),
             'body' => $this->truncateForLog($body),
+            'company' => $this->config->companyId,
         ]);
     }
 

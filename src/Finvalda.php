@@ -63,15 +63,53 @@ final class Finvalda
     private ?Permissions $permissions = null;
     private ?Transactions $transactions = null;
 
+    /** @var array<string, self> */
+    private array $companyClients = [];
+
     /**
      * Create a new Finvalda API client instance.
      *
      * @param  FinvaldaConfig  $config  API connection configuration
      * @param  HttpClient|null  $httpClient  Optional pre-configured HTTP client (for testing or custom middleware)
      */
-    public function __construct(FinvaldaConfig $config, ?HttpClient $httpClient = null)
+    public function __construct(
+        private readonly FinvaldaConfig $config,
+        ?HttpClient $httpClient = null,
+    ) {
+        $this->http = $httpClient ?? new HttpClient($this->config);
+    }
+
+    /**
+     * A client identical to this one but bound to another company — or, with
+     * null, to Finvalda's default company, which omits the CompanyID header.
+     * Useful for report templates, which are registered per company: a template
+     * living only on the default company renders documents created elsewhere.
+     *
+     * The returned client shares this one's transport, logger, debug capture and
+     * recorder, so its calls stay visible in getLastDebugInfo() and recordings().
+     * Switching any of logging, debug capture or recording on or off later reaches
+     * both clients, in either direction, whichever one you call it on.
+     * Repeated calls for the same company return the same client.
+     */
+    public function withCompany(?string $companyId): self
     {
-        $this->http = $httpClient ?? new HttpClient($config);
+        // "\0default" cannot collide with a real company id.
+        $key = $companyId ?? "\0default";
+
+        if (! isset($this->companyClients[$key])) {
+            $http = $this->http->withCompanyId($companyId);
+            $this->companyClients[$key] = new self($http->getConfig(), $http);
+        }
+
+        return $this->companyClients[$key];
+    }
+
+    /**
+     * A client bound to Finvalda's default company. See withCompany().
+     */
+    public function withoutCompany(): self
+    {
+        return $this->withCompany(null);
     }
 
     /**

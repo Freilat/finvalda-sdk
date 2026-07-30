@@ -101,8 +101,13 @@ return [
     | Laravel log channel for SDK request/response debug records. Leave null
     | to disable SDK logging.
     |
+    | log_path is an alternative sink with no framework involved: one JSON
+    | object per line, appended to the given file, greppable with jq. When both
+    | are set, log_channel wins.
+    |
     */
     'log_channel' => env('FINVALDA_LOG_CHANNEL'),
+    'log_path' => env('FINVALDA_LOG_PATH'),
 
     /*
     |--------------------------------------------------------------------------
