@@ -158,6 +158,8 @@ FINVALDA_COMPANY_ID=your-company-id
 
 # Optional: route SDK debug logs to a Laravel log channel
 FINVALDA_LOG_CHANNEL=stack
+# Optional: or write to a JSON-lines file instead (FINVALDA_LOG_CHANNEL wins if both are set)
+FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log
 
 # Optional: retry transient failures with exponential backoff
 FINVALDA_RETRY_ENABLED=true
@@ -205,9 +207,12 @@ $pdf = $finvalda->withoutCompany()->reports()->makeInvoicePdf($params);
 $clients = $finvalda->withCompany('HTNT')->clients()->collect();
 ```
 
-Both return a **new** client. Headers are fixed when the transport is built, so the
-copy gets a fresh `HttpClient`: debug state, recordings, memoized resources and an
-injected `HttpClient` do not carry over. Cache the copy if you call it in a loop.
+Both return a client that shares this one's transport and observability state —
+logger, debug capture and recorder — so company-scoped calls show up in
+`getLastDebugInfo()` and `recordings()` whether logging, debug or recording was
+switched on before or after the company client was created, and turning any of them
+off reaches both. A custom `HttpClient` you injected keeps being used. Repeated calls
+for the same company return the same client, so calling this in a loop is fine.
 
 `FinvaldaConfig::withCompanyId()` does the same at the config level.
 
@@ -253,11 +258,23 @@ $config = new FinvaldaConfig(
 jq 'select(.status_code >= 400)' /var/log/finvalda/finvalda.log
 ```
 
-Context keys are merged into the entry next to `ts`, `level` and `message`, and missing
-directories are created. There is no rotation (use logrotate), no buffering and no level
-filter. Every failure is swallowed so that a logging problem cannot break an API call —
-which also means an unwritable path fails silently. Credentials are already redacted
-before a record reaches any logger, so the sink does not redact again.
+Each entry carries `ts` (ISO 8601, milliseconds, with offset), `pid`, `level` and
+`message`, plus the context keys merged in flat; a context key colliding with one of
+those four is written prefixed, e.g. `context_message`. The `pid` matters when several
+processes append to one file: `LOCK_EX` keeps lines intact but interleaves them, so
+group by `pid` rather than by adjacency. Missing directories are created. There is no
+rotation (use logrotate), no buffering and no level filter. A failing sink cannot break
+an API call: the first failure on each logger instance is reported through the PHP error
+log and the rest are silent. Credentials are already redacted before a record reaches
+any logger, so the sink does not redact again.
+
+In Laravel, set `FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log` instead of
+constructing the logger by hand — `FINVALDA_LOG_CHANNEL` takes precedence when both are
+set.
+
+```env
+FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log
+```
 
 ### Debug Mode
 

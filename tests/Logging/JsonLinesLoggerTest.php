@@ -94,6 +94,24 @@ class JsonLinesLoggerTest extends TestCase
         $this->assertSame(5, $entry['params']['nKiekis']);
     }
 
+    public function test_it_stringifies_a_stringable_level(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+        $level = new class implements \Stringable
+        {
+            public function __toString(): string
+            {
+                return 'notice';
+            }
+        };
+
+        (new JsonLinesLogger($path))->log($level, 'Finvalda API request');
+
+        $entry = json_decode(trim(file_get_contents($path)), true, flags: JSON_THROW_ON_ERROR);
+
+        $this->assertSame('notice', $entry['level']);
+    }
+
     public function test_it_creates_the_log_directory(): void
     {
         $path = $this->dir . '/nested/deeper/finvalda.log';

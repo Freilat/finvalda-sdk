@@ -87,6 +87,8 @@ final class Finvalda
      *
      * The returned client shares this one's transport, logger, debug capture and
      * recorder, so its calls stay visible in getLastDebugInfo() and recordings().
+     * Switching any of logging, debug capture or recording on or off later reaches
+     * both clients, in either direction, whichever one you call it on.
      * Repeated calls for the same company return the same client.
      */
     public function withCompany(?string $companyId): self

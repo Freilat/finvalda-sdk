@@ -55,7 +55,11 @@ final class JsonLinesLogger extends AbstractLogger
             $entry = [
                 'ts' => (new DateTimeImmutable())->format('Y-m-d\TH:i:s.vP'),
                 'pid' => getmypid(),
-                'level' => is_scalar($level) ? (string) $level : gettype($level),
+                'level' => match (true) {
+                    is_string($level) => $level,
+                    is_scalar($level), $level instanceof Stringable => (string) $level,
+                    default => get_debug_type($level),
+                },
                 'message' => (string) $message,
             ];
 

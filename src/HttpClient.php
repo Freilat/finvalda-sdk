@@ -80,9 +80,12 @@ final class HttpClient
     }
 
     /**
-     * A retry handler bound to the current diagnostics logger, so retry-attempt
-     * log lines always go to whatever logger is currently set rather than the
-     * one that existed at construction time.
+     * A retry handler bound to the diagnostics logger at the moment this is
+     * called. It is rebuilt whenever this instance's logger changes (see
+     * setLogger()). A sibling client created earlier via withCompanyId() keeps
+     * its own retry handler — built from whatever logger was current when it
+     * was created — until its own logger changes, even though it shares the
+     * same Diagnostics instance as this one.
      */
     private function makeRetryHandler(): ?RetryHandler
     {

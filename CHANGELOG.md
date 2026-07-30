@@ -16,10 +16,11 @@ resolves against the default company and works — but reaching that state meant
 building a second client from a second config.
 
 - **`$finvalda->withCompany('HTNT')`** and **`$finvalda->withoutCompany()`** return a
-  new client bound to another company, or (without) to Finvalda's default company.
-  Headers are fixed when the transport is built, so the copy carries a fresh
-  `HttpClient`: debug state, recordings, memoized resources and an injected
-  `HttpClient` do not carry over. Cache the copy if you call it in a loop.
+  client bound to another company, or (without) to Finvalda's default company. The
+  client shares this one's transport, logger, debug capture and recorder, so a
+  company-scoped call still shows up in `getLastDebugInfo()` and `recordings()`, and a
+  custom injected `HttpClient` keeps being used. Repeated calls for the same company
+  return the same client, memoized for the lifetime of the parent.
 - **`FinvaldaConfig::withCompanyId()`** is the same operation at the config level.
 - **`HttpClient::getConfig()`** exposes the configuration a transport was built from.
 
@@ -29,14 +30,31 @@ The SDK logs at debug level around every request and redacts credentials first, 
 shipped nowhere to put those records, so every consumer wrote a file sink.
 
 - **`new JsonLinesLogger($path)`** is a PSR-3 logger appending one JSON object per line
-  (`ts`, `level`, `message`, plus the context keys merged in) — greppable with `jq`.
+  (`ts` with millisecond precision and offset, `pid`, `level`, `message`, plus the
+  context keys merged in flat) — greppable with `jq`. A context key colliding with one
+  of those four is written prefixed, e.g. `context_message`, rather than dropped.
   Missing directories are created; strings in the context are capped at
   `maxBodyBytes` (default 200 KB, above the SDK's own 100 KB body cap so records the
   SDK already truncated are not marked twice).
+- Configure it via `log_path` (`FINVALDA_LOG_PATH` in Laravel) instead of constructing
+  it by hand; `log_channel`/`FINVALDA_LOG_CHANNEL` takes precedence when both are set.
 - No rotation, no buffering, no level filter — rotate with logrotate, filter with `jq`.
-  Every failure is swallowed so a logging problem cannot break an API call, which also
-  means an unwritable path fails silently. Redaction stays in `HttpClient`; the sink
-  does not mask a second time.
+  A failing sink cannot break an API call: the first failure on each logger instance is
+  reported through the PHP error log and the rest are silent. Redaction stays in
+  `HttpClient`; the sink does not mask a second time.
+
+### Fixed
+
+- **Auth headers are sent with every request** instead of living only in the Guzzle
+  client's constructor defaults. A caller-supplied `ClientInterface` previously sent no
+  `UserName`, `Password` or `CompanyID` at all, and `getLastDebugInfo()` and recordings
+  displayed headers that had never gone out. Header presence is now assertable in tests.
+- **`Finvalda\Debug\Diagnostics`** is the single holder for a client's observability
+  state — PSR-3 logger, debug flag, the `LastExchange` debug snapshot and the
+  `Recorder` — replacing four separate `HttpClient` fields that a company-scoped copy
+  could otherwise forget to carry over one at a time. `withCompanyId()` shares this one
+  instance by reference, so a company-scoped client and its parent read and write the
+  same logger, debug snapshot and recording history.
 
 ## [3.5.0] - 2026-07-29
 
