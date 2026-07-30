@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda;
 
+use Finvalda\Debug\LastExchange;
 use Finvalda\Enums\AccessResult;
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\AccessDeniedException;
@@ -54,9 +55,7 @@ final class HttpClient
 
     private bool $debug = false;
 
-    private array $lastRequest = [];
-
-    private array $lastResponse = [];
+    private LastExchange $lastExchange;
 
     private ?Recorder $recorder = null;
 
@@ -80,6 +79,7 @@ final class HttpClient
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
         );
+        $this->lastExchange = new LastExchange();
 
         if ($this->config->record) {
             $this->recorder = new Recorder(
@@ -114,8 +114,7 @@ final class HttpClient
         $this->debug = $debug;
 
         if (! $debug) {
-            $this->lastRequest = [];
-            $this->lastResponse = [];
+            $this->lastExchange->clear();
         }
     }
 
@@ -127,10 +126,7 @@ final class HttpClient
      */
     public function getLastDebugInfo(): array
     {
-        return [
-            'request' => $this->lastRequest,
-            'response' => $this->lastResponse,
-        ];
+        return $this->lastExchange->toArray();
     }
 
     /**
@@ -302,12 +298,12 @@ final class HttpClient
             $this->logRequest($method, $endpoint, $options);
 
             if ($this->debug) {
-                $this->lastRequest = [
+                $this->lastExchange->setRequest([
                     'method' => $method,
                     'url' => rtrim($this->config->baseUrl, '/') . '/' . $endpoint,
                     'headers' => Redactor::apply($options['headers']),
                     'body' => $options['body'] ?? $options['form_params'] ?? $options['json'] ?? null,
-                ];
+                ]);
             }
 
             try {
@@ -324,11 +320,11 @@ final class HttpClient
             $this->logResponse($method, $endpoint, $response->getStatusCode(), $duration, $body);
 
             if ($this->debug) {
-                $this->lastResponse = [
+                $this->lastExchange->setResponse([
                     'status_code' => $response->getStatusCode(),
                     'headers' => $response->getHeaders(),
                     'body' => $body,
-                ];
+                ]);
             }
 
             $this->recorder?->record(new Exchange(
