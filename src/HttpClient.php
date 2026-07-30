@@ -46,8 +46,6 @@ final class HttpClient
 
     private ClientInterface $client;
 
-    private ?RetryHandler $retryHandler;
-
     private OutboundNumericNormalizer $normalizer;
 
     private Diagnostics $diagnostics;
@@ -65,7 +63,6 @@ final class HttpClient
             'timeout' => $this->config->timeout,
         ]);
         $this->diagnostics = new Diagnostics($this->config->logger);
-        $this->retryHandler = $this->makeRetryHandler();
         $this->normalizer = new OutboundNumericNormalizer(
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
@@ -80,14 +77,12 @@ final class HttpClient
     }
 
     /**
-     * A retry handler bound to the diagnostics logger at the moment this is
-     * called. It is rebuilt whenever this instance's logger changes (see
-     * setLogger()). A sibling client created earlier via withCompanyId() keeps
-     * its own retry handler — built from whatever logger was current when it
-     * was created — until its own logger changes, even though it shares the
-     * same Diagnostics instance as this one.
+     * A retry handler bound to the diagnostics logger as it stands right now.
+     * Built fresh per retried request rather than cached, so it always reflects
+     * the current logger — shared, via Diagnostics, with every sibling created
+     * through withCompanyId().
      */
-    private function makeRetryHandler(): ?RetryHandler
+    private function retryHandler(): ?RetryHandler
     {
         return $this->config->retry !== null
             ? new RetryHandler($this->config->retry, $this->diagnostics->logger())
@@ -117,7 +112,6 @@ final class HttpClient
     {
         $copy = new self($this->config->withCompanyId($companyId), $this->client);
         $copy->diagnostics = $this->diagnostics;
-        $copy->retryHandler = $copy->makeRetryHandler();
 
         return $copy;
     }
@@ -128,7 +122,6 @@ final class HttpClient
     public function setLogger(?LoggerInterface $logger): void
     {
         $this->diagnostics->setLogger($logger);
-        $this->retryHandler = $this->makeRetryHandler();
     }
 
     /**
@@ -365,8 +358,10 @@ final class HttpClient
             return $body;
         };
 
-        if ($this->retryHandler !== null) {
-            return $this->withShortestFloatEncoding(fn (): string => $this->retryHandler->execute($doRequest));
+        $retryHandler = $this->retryHandler();
+
+        if ($retryHandler !== null) {
+            return $this->withShortestFloatEncoding(fn (): string => $retryHandler->execute($doRequest));
         }
 
         return $this->withShortestFloatEncoding($doRequest);
@@ -483,6 +478,7 @@ final class HttpClient
             'params' => Redactor::apply($options['query'] ?? $options['json'] ?? []),
             'has_body' => isset($options['body']) || isset($options['json']),
             'body' => $this->truncateForLog(is_string($body) ? $body : null),
+            'company' => $this->config->companyId,
         ]);
     }
 
@@ -500,6 +496,7 @@ final class HttpClient
             'status_code' => $statusCode,
             'duration_ms' => round($duration * 1000, 2),
             'body' => $this->truncateForLog($body),
+            'company' => $this->config->companyId,
         ]);
     }
 

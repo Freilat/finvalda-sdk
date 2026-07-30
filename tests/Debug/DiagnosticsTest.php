@@ -7,7 +7,6 @@ namespace Finvalda\Tests\Debug;
 use Finvalda\Debug\Diagnostics;
 use Finvalda\Enums\CredentialMode;
 use PHPUnit\Framework\TestCase;
-use Psr\Log\AbstractLogger;
 use Psr\Log\NullLogger;
 
 class DiagnosticsTest extends TestCase
@@ -65,22 +64,5 @@ class DiagnosticsTest extends TestCase
         $diagnostics->stopRecording();
 
         $this->assertNull($diagnostics->recorder());
-    }
-
-    public function test_two_holders_of_the_same_instance_see_each_others_mutations(): void
-    {
-        $diagnostics = new Diagnostics();
-        $alias = $diagnostics;
-
-        $diagnostics->setDebug(true);
-        $diagnostics->startRecording(5, CredentialMode::Real);
-        $logger = new class extends AbstractLogger {
-            public function log($level, string|\Stringable $message, array $context = []): void {}
-        };
-        $diagnostics->setLogger($logger);
-
-        $this->assertTrue($alias->debugEnabled());
-        $this->assertNotNull($alias->recorder());
-        $this->assertSame($logger, $alias->logger());
     }
 }

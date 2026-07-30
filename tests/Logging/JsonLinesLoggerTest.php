@@ -206,6 +206,7 @@ class JsonLinesLoggerTest extends TestCase
             baseUrl: 'https://example.com',
             username: 'demo',
             password: 'secret',
+            companyId: 'ACME',
             logger: new JsonLinesLogger($path),
         ), $guzzle);
 
@@ -222,11 +223,13 @@ class JsonLinesLoggerTest extends TestCase
         $this->assertSame('GET', $lines[0]['method']);
         $this->assertSame('GetPrekes', $lines[0]['endpoint']);
         $this->assertSame('ABC', $lines[0]['params']['sKodas']);
+        $this->assertSame('ACME', $lines[0]['company']);
 
         $this->assertSame('Finvalda API response', $lines[1]['message']);
         $this->assertSame(200, $lines[1]['status_code']);
         $this->assertStringContainsString('AccessResult', $lines[1]['body']);
         $this->assertSame($lines[0]['pid'], $lines[1]['pid']);
+        $this->assertSame('ACME', $lines[1]['company']);
     }
 
     /**

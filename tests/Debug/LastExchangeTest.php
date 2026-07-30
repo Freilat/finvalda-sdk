@@ -38,14 +38,4 @@ class LastExchangeTest extends TestCase
 
         $this->assertSame(['request' => [], 'response' => []], $exchange->toArray());
     }
-
-    public function test_a_shared_instance_is_visible_to_every_holder(): void
-    {
-        $exchange = new LastExchange();
-        $alias = $exchange;
-
-        $exchange->setRequest(['method' => 'GET']);
-
-        $this->assertSame(['method' => 'GET'], $alias->toArray()['request']);
-    }
 }

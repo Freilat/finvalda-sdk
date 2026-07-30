@@ -212,7 +212,9 @@ logger, debug capture and recorder — so company-scoped calls show up in
 `getLastDebugInfo()` and `recordings()` whether logging, debug or recording was
 switched on before or after the company client was created, and turning any of them
 off reaches both. A custom `HttpClient` you injected keeps being used. Repeated calls
-for the same company return the same client, so calling this in a loop is fine.
+for the same company return the same client, so calling this in a loop over one company
+is fine — but each *distinct* company you pass is retained for the parent's lifetime,
+which matters when the parent is a long-lived singleton (e.g. the Laravel binding).
 
 `FinvaldaConfig::withCompanyId()` does the same at the config level.
 
@@ -266,15 +268,13 @@ group by `pid` rather than by adjacency. Missing directories are created. There 
 rotation (use logrotate), no buffering and no level filter. A failing sink cannot break
 an API call: the first failure on each logger instance is reported through the PHP error
 log and the rest are silent. Credentials are already redacted before a record reaches
-any logger, so the sink does not redact again.
+any logger, so the sink does not redact again. The file still holds full request and
+response bodies — client names, debts, invoice contents — and is created with default
+umask permissions, so restrict its path to operators who should see that data.
 
 In Laravel, set `FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log` instead of
 constructing the logger by hand — `FINVALDA_LOG_CHANNEL` takes precedence when both are
 set.
-
-```env
-FINVALDA_LOG_PATH=/var/log/finvalda/finvalda.log
-```
 
 ### Debug Mode
 

@@ -21,6 +21,7 @@ use Finvalda\Resources\Reports;
 use Finvalda\Resources\Services;
 use Finvalda\Resources\Stock;
 use Finvalda\Resources\Transactions;
+use Finvalda\Retry\RetryPolicy;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -386,6 +387,65 @@ class FinvaldaTest extends TestCase
         $messages = array_column($spy->records, 1);
         $this->assertContains('Finvalda API request', $messages);
         $this->assertContains('Finvalda API response', $messages);
+    }
+
+    public function test_a_logger_set_after_a_company_client_exists_receives_its_retry_records(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+                retry: new RetryPolicy(maxAttempts: 2, delayMs: 0),
+            ),
+            [
+                new GuzzleResponse(500, [], 'Server Error'),
+                new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success'])),
+            ],
+            $history,
+        );
+
+        $child = $finvalda->withoutCompany();
+
+        $spy = new class extends AbstractLogger {
+            /** @var array<int, array{0: mixed, 1: string}> */
+            public array $records = [];
+
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->records[] = [$level, (string) $message];
+            }
+        };
+
+        $finvalda->setLogger($spy);
+        $child->products()->all();
+
+        $messages = array_column($spy->records, 1);
+        $this->assertContains('Request failed, will retry', $messages);
+        $this->assertContains('Retrying request', $messages);
+    }
+
+    public function test_switching_off_a_company_client_does_not_reset_the_parents_recordings(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+            ),
+            [new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $finvalda->record();
+        $finvalda->products()->all();
+        $finvalda->withoutCompany();               // must not reset the parent's history
+
+        $this->assertCount(1, $finvalda->recordings());
     }
 
     public function test_a_parent_and_a_company_client_share_one_request_history(): void
