@@ -5,6 +5,7 @@ namespace Finvalda\Tests;
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
 use Finvalda\FinvaldaConfig;
+use Finvalda\Logging\JsonLinesLogger;
 use Finvalda\Retry\RetryPolicy;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -222,6 +223,44 @@ class FinvaldaConfigTest extends TestCase
         $config = $this->fullyPopulatedConfig();
 
         $this->assertNull($config->withCompanyId(null)->companyId);
+    }
+
+    public function test_from_array_builds_a_json_lines_logger_from_log_path(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '/tmp/finvalda-test.log',
+        ]);
+
+        $this->assertInstanceOf(JsonLinesLogger::class, $config->logger);
+    }
+
+    public function test_from_array_prefers_an_explicit_logger_over_log_path(): void
+    {
+        $logger = new NullLogger();
+
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '/tmp/finvalda-test.log',
+        ], $logger);
+
+        $this->assertSame($logger, $config->logger);
+    }
+
+    public function test_from_array_ignores_an_empty_log_path(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_path' => '',
+        ]);
+
+        $this->assertNull($config->logger);
     }
 
     /**

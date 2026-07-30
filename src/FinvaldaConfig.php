@@ -6,6 +6,7 @@ namespace Finvalda;
 
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
+use Finvalda\Logging\JsonLinesLogger;
 use Finvalda\Retry\RetryPolicy;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
@@ -89,6 +90,9 @@ final class FinvaldaConfig
      * The optional `record_credentials` key accepts 'masked' (default), 'env', or
      * 'real'; anything else falls back to 'masked'.
      *
+     * The optional `log_path` key builds a JsonLinesLogger when no $logger is
+     * passed in; an explicit $logger always wins.
+     *
      * @param  array<string, mixed>  $config
      */
     public static function fromArray(array $config, ?LoggerInterface $logger = null): self
@@ -103,6 +107,12 @@ final class FinvaldaConfig
                 multiplier: (float) ($retryConfig['multiplier'] ?? 2.0),
                 maxDelayMs: (int) ($retryConfig['max_delay_ms'] ?? 10000),
             );
+        }
+
+        // An explicitly passed logger wins: the Laravel provider passes one when
+        // `log_channel` is configured.
+        if ($logger === null && ! empty($config['log_path'])) {
+            $logger = new JsonLinesLogger((string) $config['log_path']);
         }
 
         return new self(
