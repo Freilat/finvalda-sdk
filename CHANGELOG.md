@@ -30,12 +30,11 @@ The SDK logs at debug level around every request and redacts credentials first, 
 shipped nowhere to put those records, so every consumer wrote a file sink.
 
 - **`new JsonLinesLogger($path)`** is a PSR-3 logger appending one JSON object per line
-  (`ts` with millisecond precision and offset, `pid`, `level`, `message`, `company`,
-  plus the context keys merged in flat) — greppable with `jq`. A context key colliding
-  with one of those is written prefixed, e.g. `context_message`, rather than dropped.
-  Missing directories are created; strings in the context are capped at
-  `maxBodyBytes` (default 200 KB, above the SDK's own 100 KB body cap so records the
-  SDK already truncated are not marked twice).
+  with `ts`, `pid`, `level` and `message`, plus context keys (including `company`) merged
+  in flat — greppable with `jq`. A context key colliding with one of those four is
+  written prefixed, e.g. `context_message`, rather than dropped. Missing directories are
+  created; strings in the context are capped at `maxBodyBytes` (default 200 KB, above the
+  SDK's own 100 KB body cap so records the SDK already truncated are not marked twice).
 - Configure it via `log_path` (`FINVALDA_LOG_PATH` in Laravel) instead of constructing
   it by hand; `log_channel`/`FINVALDA_LOG_CHANNEL` takes precedence when both are set.
 - No rotation, no buffering, no level filter — rotate with logrotate, filter with `jq`.
