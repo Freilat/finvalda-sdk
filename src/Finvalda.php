@@ -69,9 +69,35 @@ final class Finvalda
      * @param  FinvaldaConfig  $config  API connection configuration
      * @param  HttpClient|null  $httpClient  Optional pre-configured HTTP client (for testing or custom middleware)
      */
-    public function __construct(FinvaldaConfig $config, ?HttpClient $httpClient = null)
-    {
+    public function __construct(
+        private readonly FinvaldaConfig $config,
+        ?HttpClient $httpClient = null,
+    ) {
         $this->http = $httpClient ?? new HttpClient($config);
+    }
+
+    /**
+     * A client identical to this one but bound to another company — or, with
+     * null, to Finvalda's default company, which omits the CompanyID header.
+     * Useful for report templates, which are registered per company: a template
+     * living only on the default company renders documents created elsewhere.
+     *
+     * Returns a NEW client with a fresh HttpClient — headers are fixed when the
+     * transport is built, so debug state, recordings, memoized resources and an
+     * injected HttpClient do not carry over. Cache the result if you call this
+     * in a loop.
+     */
+    public function withCompany(?string $companyId): self
+    {
+        return new self($this->config->withCompanyId($companyId));
+    }
+
+    /**
+     * A client bound to Finvalda's default company. See withCompany().
+     */
+    public function withoutCompany(): self
+    {
+        return $this->withCompany(null);
     }
 
     /**

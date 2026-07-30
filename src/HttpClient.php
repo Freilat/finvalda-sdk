@@ -91,6 +91,14 @@ final class HttpClient
     }
 
     /**
+     * The configuration this transport was built from.
+     */
+    public function getConfig(): FinvaldaConfig
+    {
+        return $this->config;
+    }
+
+    /**
      * Set the logger instance for request/response logging.
      */
     public function setLogger(?LoggerInterface $logger): void

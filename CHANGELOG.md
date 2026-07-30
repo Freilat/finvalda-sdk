@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-07-30
+
+### Added — company-scoped clients
+
+Report templates are registered per company, so a client built with
+`companyId: 'htrailer'` cannot render a template that exists only on the default
+company, even for a document `htrailer` created. Omitting the `CompanyID` header
+resolves against the default company and works — but reaching that state meant
+building a second client from a second config.
+
+- **`$finvalda->withCompany('HTNT')`** and **`$finvalda->withoutCompany()`** return a
+  new client bound to another company, or (without) to Finvalda's default company.
+  Headers are fixed when the transport is built, so the copy carries a fresh
+  `HttpClient`: debug state, recordings, memoized resources and an injected
+  `HttpClient` do not carry over. Cache the copy if you call it in a loop.
+- **`FinvaldaConfig::withCompanyId()`** is the same operation at the config level.
+- **`HttpClient::getConfig()`** exposes the configuration a transport was built from.
+
+### Added — `Logging\JsonLinesLogger`
+
+The SDK logs at debug level around every request and redacts credentials first, but
+shipped nowhere to put those records, so every consumer wrote a file sink.
+
+- **`new JsonLinesLogger($path)`** is a PSR-3 logger appending one JSON object per line
+  (`ts`, `level`, `message`, plus the context keys merged in) — greppable with `jq`.
+  Missing directories are created; strings in the context are capped at
+  `maxBodyBytes` (default 200 KB, above the SDK's own 100 KB body cap so records the
+  SDK already truncated are not marked twice).
+- No rotation, no buffering, no level filter — rotate with logrotate, filter with `jq`.
+  Every failure is swallowed so a logging problem cannot break an API call, which also
+  means an unwritable path fails silently. Redaction stays in `HttpClient`; the sink
+  does not mask a second time.
+
 ## [3.5.0] - 2026-07-29
 
 ### Added — request/response recording, readable or as a curl command

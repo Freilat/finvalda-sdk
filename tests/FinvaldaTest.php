@@ -143,4 +143,33 @@ class FinvaldaTest extends TestCase
         $this->assertSame($finvalda, $finvalda->stopRecording());
         $this->assertSame([], $finvalda->recordings());
     }
+
+    public function test_with_company_returns_a_client_bound_to_another_company(): void
+    {
+        $finvalda = new Finvalda(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            companyId: 'htrailer',
+        ));
+
+        $other = $finvalda->withCompany('HTNT');
+
+        $this->assertSame('HTNT', $other->getHttpClient()->getConfig()->companyId);
+        $this->assertNotSame($finvalda, $other);
+        $this->assertNotSame($finvalda->getHttpClient(), $other->getHttpClient());
+        $this->assertSame('htrailer', $finvalda->getHttpClient()->getConfig()->companyId);
+    }
+
+    public function test_without_company_returns_a_client_bound_to_the_default_company(): void
+    {
+        $finvalda = new Finvalda(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'user',
+            password: 'pass',
+            companyId: 'htrailer',
+        ));
+
+        $this->assertNull($finvalda->withoutCompany()->getHttpClient()->getConfig()->companyId);
+    }
 }

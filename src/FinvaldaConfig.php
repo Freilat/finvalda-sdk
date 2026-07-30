@@ -49,6 +49,37 @@ final class FinvaldaConfig
     }
 
     /**
+     * A copy of this config bound to another company, or — with null — to
+     * Finvalda's default company, which omits the CompanyID header.
+     *
+     * Report templates are registered per company, so a template that exists
+     * only on the default company cannot be rendered through a company-scoped
+     * connection even when the document itself was created there.
+     */
+    public function withCompanyId(?string $companyId): self
+    {
+        return new self(
+            baseUrl: $this->baseUrl,
+            username: $this->username,
+            password: $this->password,
+            connString: $this->connString,
+            companyId: $companyId,
+            language: $this->language,
+            removeEmptyStringTags: $this->removeEmptyStringTags,
+            removeZeroNumberTags: $this->removeZeroNumberTags,
+            removeNewLines: $this->removeNewLines,
+            timeout: $this->timeout,
+            logger: $this->logger,
+            retry: $this->retry,
+            normalizeFloats: $this->normalizeFloats,
+            floatPrecision: $this->floatPrecision,
+            record: $this->record,
+            recordLimit: $this->recordLimit,
+            recordCredentials: $this->recordCredentials,
+        );
+    }
+
+    /**
      * Build a config from a snake_case array (the shape of config/finvalda.php).
      *
      * The optional `retry` sub-array maps to a RetryPolicy when its `enabled`

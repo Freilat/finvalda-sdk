@@ -12,6 +12,7 @@ Built from the official [Finvalda API documentation](https://documenter.getpostm
 - [Configuration](#configuration)
   - [Basic Configuration](#basic-configuration)
   - [Laravel Integration](#laravel-integration)
+  - [Company-Scoped Clients](#company-scoped-clients)
   - [Logging](#logging)
   - [Recording Requests](#recording-requests)
   - [Retry Policy](#retry-policy)
@@ -189,6 +190,27 @@ use Finvalda\Laravel\Facades\Finvalda;
 $clients = Finvalda::clients()->collect();
 ```
 
+### Company-Scoped Clients
+
+`companyId` sets the `CompanyID` header on every request. Some things are registered
+per company — report templates in particular — so an individual call sometimes needs a
+different company than the one the client was configured with:
+
+```php
+// Render a template that exists only on the default company (no CompanyID header)
+// for a document created under this client's company.
+$pdf = $finvalda->withoutCompany()->reports()->makeInvoicePdf($params);
+
+// Or target another company explicitly.
+$clients = $finvalda->withCompany('HTNT')->clients()->collect();
+```
+
+Both return a **new** client. Headers are fixed when the transport is built, so the
+copy gets a fresh `HttpClient`: debug state, recordings, memoized resources and an
+injected `HttpClient` do not carry over. Cache the copy if you call it in a loop.
+
+`FinvaldaConfig::withCompanyId()` does the same at the config level.
+
 ### Logging
 
 Enable PSR-3 logging for request/response debugging:
@@ -212,6 +234,30 @@ $finvalda->setLogger($logger);
 ```
 
 Both records are logged at `debug` level. `Finvalda API request` includes method, endpoint, parameters, and the full request body (`body`, string or null for GET). `Finvalda API response` includes method, endpoint, status code, response time, and the full response body (`body`). Bodies larger than 100 KB are truncated with a `... [truncated N bytes]` marker — route the SDK's debug-level records to a suitable handler if log volume is a concern.
+
+#### Logging to a file without a logging framework
+
+`JsonLinesLogger` is a PSR-3 sink that appends one JSON object per line — enough to
+grep with `jq`, and no dependency beyond the `psr/log` the SDK already requires:
+
+```php
+use Finvalda\Logging\JsonLinesLogger;
+
+$config = new FinvaldaConfig(
+    // ...
+    logger: new JsonLinesLogger('/var/log/finvalda/finvalda.log'),
+);
+```
+
+```bash
+jq 'select(.status_code >= 400)' /var/log/finvalda/finvalda.log
+```
+
+Context keys are merged into the entry next to `ts`, `level` and `message`, and missing
+directories are created. There is no rotation (use logrotate), no buffering and no level
+filter. Every failure is swallowed so that a logging problem cannot break an API call —
+which also means an unwritable path fails silently. Credentials are already redacted
+before a record reaches any logger, so the sink does not redact again.
 
 ### Debug Mode
 
