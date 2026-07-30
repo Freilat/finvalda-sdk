@@ -4,7 +4,13 @@ declare(strict_types=1);
 
 namespace Finvalda\Tests\Logging;
 
+use Finvalda\FinvaldaConfig;
+use Finvalda\HttpClient;
 use Finvalda\Logging\JsonLinesLogger;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 
 class JsonLinesLoggerTest extends TestCase
@@ -167,6 +173,42 @@ class JsonLinesLoggerTest extends TestCase
 
         $this->assertStringContainsString('Finvalda JsonLinesLogger:', $errors);
         $this->assertFileDoesNotExist($path);
+    }
+
+    public function test_it_records_a_real_request_and_response_cycle_as_two_lines(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+        $guzzle = new Client([
+            'handler' => HandlerStack::create(new MockHandler([
+                new Response(200, [], json_encode(['AccessResult' => 'Success', 'Data' => []])),
+            ])),
+        ]);
+
+        $httpClient = new HttpClient(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'demo',
+            password: 'secret',
+            logger: new JsonLinesLogger($path),
+        ), $guzzle);
+
+        $httpClient->get('GetPrekes', ['sKodas' => 'ABC']);
+
+        $lines = array_map(
+            fn (string $line): array => json_decode($line, true, flags: JSON_THROW_ON_ERROR),
+            file($path, FILE_IGNORE_NEW_LINES),
+        );
+
+        $this->assertCount(2, $lines);
+
+        $this->assertSame('Finvalda API request', $lines[0]['message']);
+        $this->assertSame('GET', $lines[0]['method']);
+        $this->assertSame('GetPrekes', $lines[0]['endpoint']);
+        $this->assertSame('ABC', $lines[0]['params']['sKodas']);
+
+        $this->assertSame('Finvalda API response', $lines[1]['message']);
+        $this->assertSame(200, $lines[1]['status_code']);
+        $this->assertStringContainsString('AccessResult', $lines[1]['body']);
+        $this->assertSame($lines[0]['pid'], $lines[1]['pid']);
     }
 
     /**
