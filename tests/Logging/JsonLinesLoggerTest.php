@@ -108,4 +108,23 @@ class JsonLinesLoggerTest extends TestCase
 
         $this->assertSame('', file_get_contents($blocker));
     }
+
+    public function test_it_keeps_context_values_that_collide_with_reserved_keys(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+
+        (new JsonLinesLogger($path))->debug('Finvalda API request', [
+            'message' => 'from the context',
+            'level' => 'from the context too',
+            'endpoint' => 'GetPrekes',
+        ]);
+
+        $entry = json_decode(trim(file_get_contents($path)), true, flags: JSON_THROW_ON_ERROR);
+
+        $this->assertSame('Finvalda API request', $entry['message']);
+        $this->assertSame('debug', $entry['level']);
+        $this->assertSame('from the context', $entry['context_message']);
+        $this->assertSame('from the context too', $entry['context_level']);
+        $this->assertSame('GetPrekes', $entry['endpoint']);
+    }
 }

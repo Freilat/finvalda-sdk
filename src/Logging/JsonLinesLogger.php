@@ -13,7 +13,8 @@ use Throwable;
 /**
  * Appends one JSON object per line to a file, so SDK log records stay greppable
  * with `jq` without pulling in a logging framework. Context keys are merged into
- * the entry alongside `ts`, `level` and `message`.
+ * the entry alongside `ts`, `pid`, `level` and `message`; a colliding context key
+ * is written prefixed with `context_` rather than silently dropped.
  *
  * Credentials are NOT redacted here: HttpClient has already applied Redactor to
  * the records it emits. Do not add a second redaction pass — it would double-mask.
@@ -24,6 +25,12 @@ use Throwable;
  */
 final class JsonLinesLogger extends AbstractLogger
 {
+    /**
+     * Entry keys the logger owns. A context key of the same name is written
+     * prefixed with `context_` rather than silently dropped.
+     */
+    private const RESERVED_KEYS = ['ts', 'pid', 'level', 'message'];
+
     /**
      * @param  string  $path  Log file; missing directories are created
      * @param  int  $maxBodyBytes  Byte cap per context string. Deliberately above
@@ -47,7 +54,11 @@ final class JsonLinesLogger extends AbstractLogger
                 'pid' => getmypid(),
                 'level' => is_scalar($level) ? (string) $level : gettype($level),
                 'message' => (string) $message,
-            ] + $this->truncate($context);
+            ];
+
+            foreach ($this->truncate($context) as $key => $value) {
+                $entry[in_array($key, self::RESERVED_KEYS, true) ? "context_{$key}" : $key] = $value;
+            }
 
             $line = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
