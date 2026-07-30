@@ -20,8 +20,9 @@ use Throwable;
  * the records it emits. Do not add a second redaction pass — it would double-mask.
  *
  * No rotation, no buffering, no minimum level: rotate with logrotate, and filter
- * with jq. Every failure is swallowed — a logging problem must never break an
- * API call — which also means a bad path fails silently.
+ * with jq. Every failure is swallowed so a logging problem can never break an
+ * API call, but the first failure on each instance is reported through the PHP
+ * error log so a bad path does not fail silently.
  */
 final class JsonLinesLogger extends AbstractLogger
 {
@@ -30,6 +31,8 @@ final class JsonLinesLogger extends AbstractLogger
      * prefixed with `context_` rather than silently dropped.
      */
     private const RESERVED_KEYS = ['ts', 'pid', 'level', 'message'];
+
+    private bool $reportedFailure = false;
 
     /**
      * @param  string  $path  Log file; missing directories are created
@@ -63,6 +66,8 @@ final class JsonLinesLogger extends AbstractLogger
             $line = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
             if ($line === false) {
+                $this->reportFailure('could not encode a record as JSON: ' . json_last_error_msg());
+
                 return;
             }
 
@@ -72,10 +77,28 @@ final class JsonLinesLogger extends AbstractLogger
                 @mkdir($directory, 0775, true);
             }
 
-            @file_put_contents($this->path, $line . "\n", FILE_APPEND | LOCK_EX);
-        } catch (Throwable) {
-            // Nothing left to do: reporting a logging failure needs a logger.
+            if (@file_put_contents($this->path, $line . "\n", FILE_APPEND | LOCK_EX) === false) {
+                $this->reportFailure('could not write to the log file');
+            }
+        } catch (Throwable $e) {
+            $this->reportFailure($e::class . ': ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Surface the first failure on this instance through the PHP error log:
+     * a sink that dies silently is undiagnosable. Later failures stay quiet so
+     * a broken path cannot flood the error log from a fleet of cron jobs.
+     */
+    private function reportFailure(string $reason): void
+    {
+        if ($this->reportedFailure) {
+            return;
+        }
+
+        $this->reportedFailure = true;
+
+        error_log("Finvalda JsonLinesLogger: {$reason} (path: {$this->path}). Further failures from this instance are silent.");
     }
 
     /**

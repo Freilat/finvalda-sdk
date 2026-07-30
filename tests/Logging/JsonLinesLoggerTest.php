@@ -97,18 +97,6 @@ class JsonLinesLoggerTest extends TestCase
         $this->assertFileExists($path);
     }
 
-    public function test_it_does_not_throw_when_the_path_cannot_be_written(): void
-    {
-        mkdir($this->dir, 0o775, true);
-        $blocker = $this->dir . '/blocker';
-        touch($blocker);
-
-        // A file where a directory is expected: mkdir and the write both fail.
-        (new JsonLinesLogger($blocker . '/finvalda.log'))->debug('Finvalda API request');
-
-        $this->assertSame('', file_get_contents($blocker));
-    }
-
     public function test_it_keeps_context_values_that_collide_with_reserved_keys(): void
     {
         $path = $this->dir . '/finvalda.log';
@@ -126,5 +114,80 @@ class JsonLinesLoggerTest extends TestCase
         $this->assertSame('from the context', $entry['context_message']);
         $this->assertSame('from the context too', $entry['context_level']);
         $this->assertSame('GetPrekes', $entry['endpoint']);
+    }
+
+    public function test_it_reports_an_unwritable_path_to_the_php_error_log_once(): void
+    {
+        mkdir($this->dir, 0o775, true);
+        $blocker = $this->dir . '/blocker';
+        touch($blocker);
+
+        // A file where a directory is expected: mkdir and the write both fail.
+        $logger = new JsonLinesLogger($blocker . '/finvalda.log');
+
+        $errors = $this->captureErrorLog(function () use ($logger): void {
+            $logger->debug('Finvalda API request');
+            $logger->debug('Finvalda API response');
+        });
+
+        $this->assertSame(1, substr_count($errors, 'Finvalda JsonLinesLogger:'));
+        $this->assertStringContainsString($blocker, $errors);
+        $this->assertSame('', file_get_contents($blocker));
+    }
+
+    public function test_it_does_not_throw_when_the_message_cannot_be_stringified(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+        $message = new class implements \Stringable
+        {
+            public function __toString(): string
+            {
+                throw new \RuntimeException('boom');
+            }
+        };
+
+        $errors = $this->captureErrorLog(function () use ($path, $message): void {
+            (new JsonLinesLogger($path))->debug($message);
+        });
+
+        $this->assertStringContainsString('boom', $errors);
+        $this->assertFileDoesNotExist($path);
+    }
+
+    public function test_it_reports_a_context_value_that_cannot_be_encoded(): void
+    {
+        $path = $this->dir . '/finvalda.log';
+        $handle = fopen('php://memory', 'r');
+
+        $errors = $this->captureErrorLog(function () use ($path, $handle): void {
+            (new JsonLinesLogger($path))->debug('Finvalda API request', ['handle' => $handle]);
+        });
+
+        fclose($handle);
+
+        $this->assertStringContainsString('Finvalda JsonLinesLogger:', $errors);
+        $this->assertFileDoesNotExist($path);
+    }
+
+    /**
+     * Run $work with error_log() redirected to a file, and return what it wrote.
+     */
+    private function captureErrorLog(callable $work): string
+    {
+        if (! is_dir($this->dir)) {
+            mkdir($this->dir, 0o775, true);
+        }
+
+        $errorLog = $this->dir . '/php-error.log';
+        $previous = ini_get('error_log');
+        ini_set('error_log', $errorLog);
+
+        try {
+            $work();
+        } finally {
+            ini_set('error_log', $previous === false ? '' : $previous);
+        }
+
+        return is_file($errorLog) ? (string) file_get_contents($errorLog) : '';
     }
 }
