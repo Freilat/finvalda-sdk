@@ -59,25 +59,7 @@ final class FinvaldaConfig
      */
     public function withCompanyId(?string $companyId): self
     {
-        return new self(
-            baseUrl: $this->baseUrl,
-            username: $this->username,
-            password: $this->password,
-            connString: $this->connString,
-            companyId: $companyId,
-            language: $this->language,
-            removeEmptyStringTags: $this->removeEmptyStringTags,
-            removeZeroNumberTags: $this->removeZeroNumberTags,
-            removeNewLines: $this->removeNewLines,
-            timeout: $this->timeout,
-            logger: $this->logger,
-            retry: $this->retry,
-            normalizeFloats: $this->normalizeFloats,
-            floatPrecision: $this->floatPrecision,
-            record: $this->record,
-            recordLimit: $this->recordLimit,
-            recordCredentials: $this->recordCredentials,
-        );
+        return new self(...[...get_object_vars($this), 'companyId' => $companyId]);
     }
 
     /**
