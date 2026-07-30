@@ -63,6 +63,9 @@ final class Finvalda
     private ?Permissions $permissions = null;
     private ?Transactions $transactions = null;
 
+    /** @var array<string, self> */
+    private array $companyClients = [];
+
     /**
      * Create a new Finvalda API client instance.
      *
@@ -73,7 +76,7 @@ final class Finvalda
         private readonly FinvaldaConfig $config,
         ?HttpClient $httpClient = null,
     ) {
-        $this->http = $httpClient ?? new HttpClient($config);
+        $this->http = $httpClient ?? new HttpClient($this->config);
     }
 
     /**
@@ -82,14 +85,21 @@ final class Finvalda
      * Useful for report templates, which are registered per company: a template
      * living only on the default company renders documents created elsewhere.
      *
-     * Returns a NEW client with a fresh HttpClient — headers are fixed when the
-     * transport is built, so debug state, recordings, memoized resources and an
-     * injected HttpClient do not carry over. Cache the result if you call this
-     * in a loop.
+     * The returned client shares this one's transport, logger, debug capture and
+     * recorder, so its calls stay visible in getLastDebugInfo() and recordings().
+     * Repeated calls for the same company return the same client.
      */
     public function withCompany(?string $companyId): self
     {
-        return new self($this->config->withCompanyId($companyId));
+        // "\0default" cannot collide with a real company id.
+        $key = $companyId ?? "\0default";
+
+        if (! isset($this->companyClients[$key])) {
+            $http = $this->http->withCompanyId($companyId);
+            $this->companyClients[$key] = new self($http->getConfig(), $http);
+        }
+
+        return $this->companyClients[$key];
     }
 
     /**

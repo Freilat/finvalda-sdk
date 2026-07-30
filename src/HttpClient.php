@@ -98,6 +98,26 @@ final class HttpClient
     }
 
     /**
+     * A transport bound to another company — or, with null, to Finvalda's
+     * default company, which omits the CompanyID header.
+     *
+     * Shares this transport's Guzzle client, logger, debug capture and recorder,
+     * so a company-scoped call still shows up in this client's getLastDebugInfo()
+     * and recordings(). Safe with a caller-supplied client: since headers are
+     * built per request, company identity does not live in the transport.
+     */
+    public function withCompanyId(?string $companyId): self
+    {
+        $copy = new self($this->config->withCompanyId($companyId), $this->client);
+        $copy->logger = $this->logger;
+        $copy->debug = $this->debug;
+        $copy->recorder = $this->recorder;
+        $copy->lastExchange = $this->lastExchange;
+
+        return $copy;
+    }
+
+    /**
      * Set the logger instance for request/response logging.
      */
     public function setLogger(?LoggerInterface $logger): void

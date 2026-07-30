@@ -24,6 +24,7 @@ use Finvalda\Resources\Transactions;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use PHPUnit\Framework\TestCase;
 
@@ -171,5 +172,116 @@ class FinvaldaTest extends TestCase
         ));
 
         $this->assertNull($finvalda->withoutCompany()->getHttpClient()->getConfig()->companyId);
+    }
+
+    /**
+     * @param  array<int, GuzzleResponse>  $responses
+     * @param  array<int, array{request: \Psr\Http\Message\RequestInterface}>  $history
+     */
+    private function createFinvaldaWithHistory(
+        FinvaldaConfig $config,
+        array $responses,
+        array &$history,
+    ): Finvalda {
+        $handlerStack = HandlerStack::create(new MockHandler($responses));
+        $handlerStack->push(Middleware::history($history));
+
+        return new Finvalda($config, new HttpClient($config, new Client(['handler' => $handlerStack])));
+    }
+
+    public function test_a_company_scoped_client_reuses_the_injected_transport(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+            ),
+            [new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $finvalda->withoutCompany()->products()->all();
+
+        $this->assertCount(1, $history, 'the clone did not use the injected transport');
+        $this->assertFalse($history[0]['request']->hasHeader('CompanyID'));
+        $this->assertSame('demo', $history[0]['request']->getHeaderLine('UserName'));
+    }
+
+    public function test_a_company_scoped_client_sends_the_named_company(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+            ),
+            [new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $finvalda->withCompany('HTNT')->products()->all();
+
+        $this->assertSame('HTNT', $history[0]['request']->getHeaderLine('CompanyID'));
+    }
+
+    public function test_a_company_scoped_call_lands_in_the_parents_recordings(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+            ),
+            [new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $finvalda->record();
+        $finvalda->withoutCompany()->products()->all();
+
+        $this->assertCount(1, $finvalda->recordings());
+    }
+
+    public function test_a_company_scoped_call_lands_in_the_parents_debug_info(): void
+    {
+        $history = [];
+        $finvalda = $this->createFinvaldaWithHistory(
+            new FinvaldaConfig(
+                baseUrl: 'https://example.com',
+                username: 'demo',
+                password: 'secret',
+                companyId: 'htrailer',
+            ),
+            [new GuzzleResponse(200, [], json_encode(['AccessResult' => 'Success']))],
+            $history,
+        );
+
+        $finvalda->setDebug(true);
+        $finvalda->withoutCompany()->products()->all();
+
+        $debug = $finvalda->getLastDebugInfo();
+        $this->assertSame(200, $debug['response']['status_code']);
+        $this->assertArrayNotHasKey('CompanyID', $debug['request']['headers']);
+    }
+
+    public function test_the_same_company_returns_the_same_client(): void
+    {
+        $finvalda = new Finvalda(new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'demo',
+            password: 'secret',
+            companyId: 'htrailer',
+        ));
+
+        $this->assertSame($finvalda->withoutCompany(), $finvalda->withoutCompany());
+        $this->assertSame($finvalda->withCompany('HTNT'), $finvalda->withCompany('HTNT'));
+        $this->assertNotSame($finvalda->withCompany('HTNT'), $finvalda->withoutCompany());
     }
 }
