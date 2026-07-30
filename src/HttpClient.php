@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Finvalda;
 
-use Finvalda\Debug\LastExchange;
+use Finvalda\Debug\Diagnostics;
 use Finvalda\Enums\AccessResult;
 use Finvalda\Enums\CredentialMode;
 use Finvalda\Exceptions\AccessDeniedException;
@@ -12,7 +12,6 @@ use Finvalda\Exceptions\FinvaldaException;
 use Finvalda\Exceptions\NetworkException;
 use Finvalda\Exceptions\ServerException;
 use Finvalda\Recording\Exchange;
-use Finvalda\Recording\Recorder;
 use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
@@ -47,17 +46,11 @@ final class HttpClient
 
     private ClientInterface $client;
 
-    private ?LoggerInterface $logger;
-
     private ?RetryHandler $retryHandler;
 
     private OutboundNumericNormalizer $normalizer;
 
-    private bool $debug = false;
-
-    private LastExchange $lastExchange;
-
-    private ?Recorder $recorder = null;
+    private Diagnostics $diagnostics;
 
     /**
      * @param FinvaldaConfig $config SDK configuration
@@ -71,22 +64,31 @@ final class HttpClient
             'base_uri' => rtrim($this->config->baseUrl, '/') . '/',
             'timeout' => $this->config->timeout,
         ]);
-        $this->logger = $this->config->logger;
-        $this->retryHandler = $this->config->retry !== null
-            ? new RetryHandler($this->config->retry, $this->logger)
-            : null;
+        $this->diagnostics = new Diagnostics($this->config->logger);
+        $this->retryHandler = $this->makeRetryHandler();
         $this->normalizer = new OutboundNumericNormalizer(
             enabled: $this->config->normalizeFloats,
             precision: $this->config->floatPrecision,
         );
-        $this->lastExchange = new LastExchange();
 
         if ($this->config->record) {
-            $this->recorder = new Recorder(
+            $this->diagnostics->startRecording(
                 $this->config->recordLimit,
                 $this->config->recordCredentials,
             );
         }
+    }
+
+    /**
+     * A retry handler bound to the current diagnostics logger, so retry-attempt
+     * log lines always go to whatever logger is currently set rather than the
+     * one that existed at construction time.
+     */
+    private function makeRetryHandler(): ?RetryHandler
+    {
+        return $this->config->retry !== null
+            ? new RetryHandler($this->config->retry, $this->diagnostics->logger())
+            : null;
     }
 
     /**
@@ -101,18 +103,18 @@ final class HttpClient
      * A transport bound to another company — or, with null, to Finvalda's
      * default company, which omits the CompanyID header.
      *
-     * Shares this transport's Guzzle client, logger, debug capture and recorder,
-     * so a company-scoped call still shows up in this client's getLastDebugInfo()
-     * and recordings(). Safe with a caller-supplied client: since headers are
-     * built per request, company identity does not live in the transport.
+     * Shares this transport's Guzzle client and diagnostics (logger, debug
+     * capture and recorder), so a company-scoped call still shows up in this
+     * client's getLastDebugInfo() and recordings(), and switching logging,
+     * debug or recording on or off later reaches both. Safe with a
+     * caller-supplied client: since headers are built per request, company
+     * identity does not live in the transport.
      */
     public function withCompanyId(?string $companyId): self
     {
         $copy = new self($this->config->withCompanyId($companyId), $this->client);
-        $copy->logger = $this->logger;
-        $copy->debug = $this->debug;
-        $copy->recorder = $this->recorder;
-        $copy->lastExchange = $this->lastExchange;
+        $copy->diagnostics = $this->diagnostics;
+        $copy->retryHandler = $copy->makeRetryHandler();
 
         return $copy;
     }
@@ -122,7 +124,8 @@ final class HttpClient
      */
     public function setLogger(?LoggerInterface $logger): void
     {
-        $this->logger = $logger;
+        $this->diagnostics->setLogger($logger);
+        $this->retryHandler = $this->makeRetryHandler();
     }
 
     /**
@@ -131,11 +134,7 @@ final class HttpClient
      */
     public function setDebug(bool $debug): void
     {
-        $this->debug = $debug;
-
-        if (! $debug) {
-            $this->lastExchange->clear();
-        }
+        $this->diagnostics->setDebug($debug);
     }
 
     /**
@@ -146,7 +145,7 @@ final class HttpClient
      */
     public function getLastDebugInfo(): array
     {
-        return $this->lastExchange->toArray();
+        return $this->diagnostics->lastExchange()->toArray();
     }
 
     /**
@@ -158,7 +157,7 @@ final class HttpClient
      */
     public function record(int $limit = 20, CredentialMode $credentials = CredentialMode::Masked): void
     {
-        $this->recorder = new Recorder($limit, $credentials);
+        $this->diagnostics->startRecording($limit, $credentials);
     }
 
     /**
@@ -166,7 +165,7 @@ final class HttpClient
      */
     public function stopRecording(): void
     {
-        $this->recorder = null;
+        $this->diagnostics->stopRecording();
     }
 
     /**
@@ -176,12 +175,12 @@ final class HttpClient
      */
     public function recordings(): array
     {
-        return $this->recorder?->all() ?? [];
+        return $this->diagnostics->recorder()?->all() ?? [];
     }
 
     public function lastRecording(): ?Exchange
     {
-        return $this->recorder?->last();
+        return $this->diagnostics->recorder()?->last();
     }
 
     public function get(string $endpoint, array $params = []): Response
@@ -317,8 +316,8 @@ final class HttpClient
 
             $this->logRequest($method, $endpoint, $options);
 
-            if ($this->debug) {
-                $this->lastExchange->setRequest([
+            if ($this->diagnostics->debugEnabled()) {
+                $this->diagnostics->lastExchange()->setRequest([
                     'method' => $method,
                     'url' => rtrim($this->config->baseUrl, '/') . '/' . $endpoint,
                     'headers' => Redactor::apply($options['headers']),
@@ -339,15 +338,15 @@ final class HttpClient
             $duration = microtime(true) - $startTime;
             $this->logResponse($method, $endpoint, $response->getStatusCode(), $duration, $body);
 
-            if ($this->debug) {
-                $this->lastExchange->setResponse([
+            if ($this->diagnostics->debugEnabled()) {
+                $this->diagnostics->lastExchange()->setResponse([
                     'status_code' => $response->getStatusCode(),
                     'headers' => $response->getHeaders(),
                     'body' => $body,
                 ]);
             }
 
-            $this->recorder?->record(new Exchange(
+            $this->diagnostics->recorder()?->record(new Exchange(
                 method: $method,
                 url: $this->recordedUrl($endpoint, $options),
                 headers: $this->recordedHeaders($options),
@@ -384,13 +383,15 @@ final class HttpClient
         float $duration,
         int $attempt,
     ): void {
-        if ($this->recorder === null) {
+        $recorder = $this->diagnostics->recorder();
+
+        if ($recorder === null) {
             return;
         }
 
         $response = $e instanceof RequestException && $e->hasResponse() ? $e->getResponse() : null;
 
-        $this->recorder->record(new Exchange(
+        $recorder->record(new Exchange(
             method: $method,
             url: $this->recordedUrl($endpoint, $options),
             headers: $this->recordedHeaders($options),
@@ -464,14 +465,16 @@ final class HttpClient
 
     private function logRequest(string $method, string $endpoint, array $options): void
     {
-        if ($this->logger === null) {
+        $logger = $this->diagnostics->logger();
+
+        if ($logger === null) {
             return;
         }
 
         $body = $options['body']
             ?? (isset($options['json']) ? json_encode($options['json']) : null);
 
-        $this->logger->debug('Finvalda API request', [
+        $logger->debug('Finvalda API request', [
             'method' => $method,
             'endpoint' => $endpoint,
             'params' => Redactor::apply($options['query'] ?? $options['json'] ?? []),
@@ -482,11 +485,13 @@ final class HttpClient
 
     private function logResponse(string $method, string $endpoint, int $statusCode, float $duration, string $body): void
     {
-        if ($this->logger === null) {
+        $logger = $this->diagnostics->logger();
+
+        if ($logger === null) {
             return;
         }
 
-        $this->logger->debug('Finvalda API response', [
+        $logger->debug('Finvalda API response', [
             'method' => $method,
             'endpoint' => $endpoint,
             'status_code' => $statusCode,
