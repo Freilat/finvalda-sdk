@@ -240,6 +240,29 @@ $config = new FinvaldaConfig(
 $finvalda->setLogger($logger);
 ```
 
+#### File payloads are elided by default
+
+Report endpoints answer with the whole document base64'd into the response
+(~58 KB for a typical invoice PDF), and `documents()->uploadFile()` sends one the
+other way as hex, at twice the file's size. Both fit inside the byte budget, so
+both used to be logged in full, and neither is readable. They are now replaced
+with `"data":"[elided 58000 bytes]"` in log records only:
+
+```php
+$config = new FinvaldaConfig(
+    // ...
+    logFileContents: false,   // default — set true to log payloads verbatim
+    logBodyBytes: 100_000,    // byte budget for what is left after eliding
+);
+```
+
+In Laravel: `FINVALDA_LOG_FILE_CONTENTS=true` and `FINVALDA_LOG_BODY_BYTES`.
+
+Only string values are elided, so a structured `data` array is untouched, and
+only values above 512 bytes qualify. **Recording is unaffected** —
+`$finvalda->record()` still captures bodies verbatim, because you reach for it
+precisely when you need the bytes, and it is bounded and opt-in.
+
 Both records are logged at `debug` level. `Finvalda API request` includes method, endpoint, parameters, and the full request body (`body`, string or null for GET). `Finvalda API response` includes method, endpoint, status code, response time, and the full response body (`body`). Bodies larger than 100 KB are truncated with a `... [truncated N bytes]` marker — route the SDK's debug-level records to a suitable handler if log volume is a concern.
 
 #### Logging to a file without a logging framework

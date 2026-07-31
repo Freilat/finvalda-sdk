@@ -39,6 +39,8 @@ final class JsonLinesLogger extends AbstractLogger
      * @param  int  $maxBodyBytes  Byte cap per context string. Deliberately above
      *                             the SDK's own 100 KB body cap so records the SDK
      *                             already truncated are not marked a second time.
+     *                             Raise it to match if you raise `log_body_bytes`
+     *                             past this, or bodies get a second marker.
      */
     public function __construct(
         private readonly string $path,
