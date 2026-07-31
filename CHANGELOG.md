@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] - 2026-07-31
+
+### Added — logging controls
+
+- **`Support\FilePayloadElider`** replaces a whole-file payload in a raw body with a
+  size marker. It matches `data`, `fileContents`, `FileContents`, `file_contents` and
+  `sFileContent`, and only ever **string** values above 512 bytes — so a structured
+  `data` array is untouched, which is what makes keying on a name that generic safe.
+- **`logFileContents`** (`log_file_contents` / `FINVALDA_LOG_FILE_CONTENTS`, default
+  `false`) restores verbatim payload logging. **`logBodyBytes`**
+  (`log_body_bytes` / `FINVALDA_LOG_BODY_BYTES`, default 100000) makes the log byte
+  budget configurable; it replaces a private constant.
+
+### Changed
+
+- **File payloads are elided from PSR-3 logs by default.** MakeInvoice/MakeReport/
+  GetAutoReport answer with the document base64'd into the response — ~58 KB each, and
+  29% of one production log — while `documents()->uploadFile()` sends one the other way
+  as hex, at twice the file's size. Both sat under the byte budget and were logged in
+  full. Set `log_file_contents` to `true` to restore the old output.
+  **Recording (`$finvalda->record()`) is unaffected** and still captures bodies
+  verbatim: it is bounded, in memory, and explicitly opted into, which is exactly when
+  you want the bytes. `BodyTruncator`'s docblock records that asymmetry as deliberate.
+
 ## [3.6.0] - 2026-07-30
 
 ### Added — company-scoped clients

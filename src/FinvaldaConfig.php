@@ -8,6 +8,7 @@ use Finvalda\Enums\CredentialMode;
 use Finvalda\Enums\Language;
 use Finvalda\Logging\JsonLinesLogger;
 use Finvalda\Retry\RetryPolicy;
+use Finvalda\Support\BodyTruncator;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
 
@@ -31,6 +32,8 @@ final class FinvaldaConfig
         public readonly bool $record = false,
         public readonly int $recordLimit = 20,
         public readonly CredentialMode $recordCredentials = CredentialMode::Masked,
+        public readonly bool $logFileContents = false,
+        public readonly int $logBodyBytes = BodyTruncator::MAX_BYTES,
     ) {
         if ($this->baseUrl === '') {
             throw new InvalidArgumentException('Finvalda base URL is required');
@@ -116,6 +119,8 @@ final class FinvaldaConfig
             recordLimit: (int) ($config['record_limit'] ?? 20),
             recordCredentials: CredentialMode::tryFrom((string) ($config['record_credentials'] ?? ''))
                 ?? CredentialMode::Masked,
+            logFileContents: (bool) ($config['log_file_contents'] ?? false),
+            logBodyBytes: (int) ($config['log_body_bytes'] ?? BodyTruncator::MAX_BYTES),
         );
     }
 }

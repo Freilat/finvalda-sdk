@@ -196,6 +196,32 @@ class FinvaldaConfigTest extends TestCase
         $this->assertSame(CredentialMode::Masked, $config->recordCredentials);
     }
 
+    public function test_file_payloads_are_elided_from_logs_by_default(): void
+    {
+        $config = new FinvaldaConfig(
+            baseUrl: 'https://example.com',
+            username: 'demo',
+            password: 'secret',
+        );
+
+        $this->assertFalse($config->logFileContents);
+        $this->assertSame(100_000, $config->logBodyBytes);
+    }
+
+    public function test_from_array_maps_the_body_logging_keys(): void
+    {
+        $config = FinvaldaConfig::fromArray([
+            'base_url' => 'https://example.com',
+            'username' => 'demo',
+            'password' => 'secret',
+            'log_file_contents' => true,
+            'log_body_bytes' => 5_000,
+        ]);
+
+        $this->assertTrue($config->logFileContents);
+        $this->assertSame(5_000, $config->logBodyBytes);
+    }
+
     public function test_with_company_id_carries_every_other_field_over_unchanged(): void
     {
         $config = $this->fullyPopulatedConfig();
@@ -287,6 +313,8 @@ class FinvaldaConfigTest extends TestCase
             record: true,
             recordLimit: 5,
             recordCredentials: CredentialMode::Real,
+            logFileContents: true,
+            logBodyBytes: 1234,
         );
     }
 }

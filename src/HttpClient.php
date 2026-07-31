@@ -16,6 +16,7 @@ use Finvalda\Responses\OperationResult;
 use Finvalda\Responses\Response;
 use Finvalda\Retry\RetryHandler;
 use Finvalda\Support\BodyTruncator;
+use Finvalda\Support\FilePayloadElider;
 use Finvalda\Support\OutboundNumericNormalizer;
 use Finvalda\Support\Redactor;
 use GuzzleHttp\Client;
@@ -29,12 +30,6 @@ use Psr\Log\LoggerInterface;
 
 final class HttpClient
 {
-    /**
-     * Maximum number of bytes of a request/response body included in
-     * PSR-3 log records. Larger bodies are truncated with a marker.
-     */
-    private const MAX_LOGGED_BODY_BYTES = BodyTruncator::MAX_BYTES;
-
     /**
      * Maximum number of bytes of a request/response body kept in a recorded
      * Exchange. Recording is bounded by exchange count as well, but a `Reports`
@@ -502,7 +497,13 @@ final class HttpClient
 
     private function truncateForLog(?string $body): ?string
     {
-        return BodyTruncator::truncate($body, self::MAX_LOGGED_BODY_BYTES);
+        // Elide first, truncate second: once a 58 KB payload is a marker the
+        // truncator has nothing left to do, which is the point.
+        if (! $this->config->logFileContents) {
+            $body = FilePayloadElider::apply($body);
+        }
+
+        return BodyTruncator::truncate($body, $this->config->logBodyBytes);
     }
 
     private function truncateForRecording(?string $body): ?string

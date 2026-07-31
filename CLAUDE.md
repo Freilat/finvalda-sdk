@@ -63,6 +63,7 @@ src/
   Debug/                    # Diagnostics (shared logger/debug/recorder state) + LastExchange snapshot
   Filters/                  # TransactionFilter, PaymentFilter DTOs
   Logging/                  # JsonLinesLogger (PSR-3 file sink, one JSON object per line)
+  Support/                  # BodyTruncator, FilePayloadElider (log-path only), Redactor, OutboundNumericNormalizer
   Recording/                # Exchange value object + Recorder ring buffer
   Resources/                # 15 resource classes (Stock, Clients, Products, etc.)
   Responses/                # Response, OperationResult

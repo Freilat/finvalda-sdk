@@ -111,6 +111,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Body Logging
+    |--------------------------------------------------------------------------
+    |
+    | Report endpoints (MakeInvoice, MakeReport, GetAutoReport) answer with the
+    | whole document base64'd into the response, and InsertDocument sends one the
+    | other way as hex. Both are elided from logs by default. Set
+    | log_file_contents to true to keep them — reach for that when a document
+    | renders wrong and you need the body verbatim. Recording ($finvalda->record())
+    | is unaffected either way.
+    |
+    | log_body_bytes caps what is left after eliding.
+    |
+    */
+    'log_file_contents' => (bool) env('FINVALDA_LOG_FILE_CONTENTS', false),
+    'log_body_bytes' => (int) env('FINVALDA_LOG_BODY_BYTES', 100000),
+
+    /*
+    |--------------------------------------------------------------------------
     | Retry Policy
     |--------------------------------------------------------------------------
     |

@@ -8,6 +8,12 @@ namespace Finvalda\Support;
  * Caps a request/response body to a byte budget, appending a marker naming the
  * number of omitted bytes. Shared by PSR-3 logging and recording so the two
  * cannot drift.
+ *
+ * One thing deliberately does NOT apply to both: FilePayloadElider runs on the
+ * logging path only. A log is unbounded, append-only and lives on disk; a
+ * recording is capped at record_limit in memory and is explicitly opted into —
+ * you reach for record() precisely when you want the bytes. Do not "fix" that
+ * asymmetry.
  */
 final class BodyTruncator
 {
